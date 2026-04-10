@@ -1,0 +1,6 @@
+.ai/
+AGENTS.md
+.env
+data/chroma_db/
+__pycache__/
+.pytest_cache/
