@@ -6,3 +6,4 @@ pydantic>=2.11
 pydantic-settings>=2.9
 python-dotenv>=1.0
 pytest>=8.3
+streamlit>=1.44
