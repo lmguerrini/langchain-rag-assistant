@@ -32,3 +32,58 @@ class DocumentMetadata(BaseModel):
 
 class ChunkMetadata(DocumentMetadata):
     chunk_index: int
+
+
+class RetrievalRequest(BaseModel):
+    query: str
+    top_k: int = 3
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Retrieval query must not be empty.")
+        return cleaned
+
+    @field_validator("top_k")
+    @classmethod
+    def validate_top_k(cls, value: int) -> int:
+        if value < 1 or value > 10:
+            raise ValueError("top_k must be between 1 and 10.")
+        return value
+
+
+class RetrievalFilters(BaseModel):
+    topic: Topic | None = None
+    library: Library | None = None
+    doc_type: DocType | None = None
+    error_family: ErrorFamily | None = None
+
+    def as_chroma_filter(self) -> dict[str, object]:
+        filters = {
+            key: value
+            for key, value in self.model_dump().items()
+            if value is not None
+        }
+        if not filters:
+            return {}
+        if len(filters) == 1:
+            key, value = next(iter(filters.items()))
+            return {key: value}
+        return {
+            "$and": [{key: value} for key, value in filters.items()]
+        }
+
+
+class RetrievedChunk(BaseModel):
+    content: str
+    metadata: ChunkMetadata
+
+
+class RetrievalResult(BaseModel):
+    rewritten_query: str
+    applied_filters: RetrievalFilters
+    used_fallback: bool
+    chunks: list[RetrievedChunk]
+    sources: list[str]

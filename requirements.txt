@@ -1,5 +1,6 @@
 langchain>=0.3,<0.4
 langchain-chroma>=0.2,<0.3
+langchain-core>=0.3,<0.4
 langchain-openai>=0.3,<0.4
 pydantic>=2.11
 pydantic-settings>=2.9
