@@ -87,3 +87,10 @@ class RetrievalResult(BaseModel):
     used_fallback: bool
     chunks: list[RetrievedChunk]
     sources: list[str]
+
+
+class AnswerResult(BaseModel):
+    answer: str
+    used_context: bool
+    retrieval: RetrievalResult
+    answer_sources: list[str]
