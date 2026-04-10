@@ -1,0 +1,7 @@
+langchain>=0.3,<0.4
+langchain-chroma>=0.2,<0.3
+langchain-openai>=0.3,<0.4
+pydantic>=2.11
+pydantic-settings>=2.9
+python-dotenv>=1.0
+pytest>=8.3
