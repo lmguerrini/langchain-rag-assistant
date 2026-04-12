@@ -1,22 +1,30 @@
+import csv
+import io
 import json
 
 import pytest
 
 from app import (
     AppValidationError,
+    clean_markdown_text_for_pdf,
+    build_conversation_csv,
     build_conversation_json,
     build_conversation_markdown,
+    build_conversation_pdf,
+    build_pdf_detail_lines,
     build_session_usage_totals,
     build_turn_record,
     format_kb_status_label,
     format_request_usage_label,
     format_source_display,
     format_session_usage_label,
+    get_export_artifact,
     get_response_generation_explanation,
     get_help_content,
     get_response_summary_line,
     get_response_type_label,
     get_user_facing_error_message,
+    normalize_text_for_pdf,
     parse_source_string,
     validate_query,
 )
@@ -354,6 +362,280 @@ def test_build_conversation_json_formats_no_context_fallback_turn() -> None:
         "tool_result": None,
         "usage": None,
     }
+
+
+def test_build_conversation_csv_formats_grounded_answer_turn() -> None:
+    csv_output = build_conversation_csv(
+        [
+            {
+                "query": "How should I persist Chroma locally?",
+                "answer": "Persist the collection in a stable directory.",
+                "used_context": True,
+                "sources": ["Chroma Persistence and Reindexing Guide"],
+                "tool_result": None,
+                "usage": {
+                    "model_name": "gpt-4.1-mini",
+                    "input_tokens": 20,
+                    "output_tokens": 10,
+                    "total_tokens": 30,
+                    "estimated_cost_usd": 0.000024,
+                },
+            }
+        ]
+    )
+
+    assert "turn_index,query,answer,response_type,used_context,sources" in csv_output
+    assert "Grounded answer" in csv_output
+    assert "Chroma Persistence and Reindexing Guide" in csv_output
+    assert "gpt-4.1-mini" in csv_output
+
+
+def test_build_conversation_csv_formats_tool_result_turn() -> None:
+    csv_output = build_conversation_csv(
+        [
+            {
+                "query": "Estimate OpenAI cost",
+                "answer": "Estimated total OpenAI cost: $0.002400 for model gpt-4.1-mini.",
+                "used_context": False,
+                "sources": [],
+                "tool_result": {
+                    "tool_name": "estimate_openai_cost",
+                    "tool_error": None,
+                },
+                "usage": None,
+            }
+        ]
+    )
+
+    row = next(csv.DictReader(io.StringIO(csv_output)))
+
+    assert row["response_type"] == "Tool result"
+    assert row["tool_name"] == "estimate_openai_cost"
+    assert row["tool_result_json"] == (
+        '{"tool_name":"estimate_openai_cost","tool_error":null}'
+    )
+
+
+def test_build_conversation_csv_formats_no_context_fallback_turn() -> None:
+    csv_output = build_conversation_csv(
+        [
+            {
+                "query": "What is the capital of France?",
+                "answer": (
+                    "I could not find enough relevant context in the knowledge base "
+                    "to answer that safely."
+                ),
+                "used_context": False,
+                "sources": [],
+                "tool_result": None,
+                "usage": None,
+            }
+        ]
+    )
+
+    row = next(csv.DictReader(io.StringIO(csv_output)))
+
+    assert row["response_type"] == "No-context fallback"
+    assert row["query"] == "What is the capital of France?"
+
+
+def test_build_conversation_csv_preserves_sources_and_usage_fields() -> None:
+    csv_output = build_conversation_csv(
+        [
+            {
+                "query": "How should I show sources in Streamlit?",
+                "answer": "Show source titles next to the answer.",
+                "used_context": True,
+                "sources": [
+                    "Streamlit Chat Patterns",
+                    "Chroma Persistence Guide",
+                ],
+                "tool_result": None,
+                "usage": {
+                    "model_name": "gpt-4.1-mini",
+                    "input_tokens": 12,
+                    "output_tokens": 5,
+                    "total_tokens": 17,
+                    "estimated_cost_usd": 0.000013,
+                },
+            }
+        ]
+    )
+
+    row = next(csv.DictReader(io.StringIO(csv_output)))
+
+    assert row["sources"] == "Streamlit Chat Patterns | Chroma Persistence Guide"
+    assert row["usage_input_tokens"] == "12"
+    assert row["usage_output_tokens"] == "5"
+    assert row["usage_total_tokens"] == "17"
+    assert row["usage_estimated_cost_usd"] in {"1.3e-05", "0.000013"}
+
+
+def test_build_conversation_pdf_returns_non_empty_bytes_for_empty_history() -> None:
+    pdf_output = build_conversation_pdf([])
+
+    assert isinstance(pdf_output, bytes)
+    assert len(pdf_output) > 0
+
+
+def test_build_conversation_pdf_returns_non_empty_bytes_for_non_empty_history() -> None:
+    pdf_output = build_conversation_pdf(
+        [
+            {
+                "query": "How should I persist Chroma locally?",
+                "answer": "Persist the collection in a stable directory.",
+                "used_context": True,
+                "sources": ["Chroma Persistence and Reindexing Guide"],
+                "tool_result": None,
+                "usage": {
+                    "model_name": "gpt-4.1-mini",
+                    "input_tokens": 20,
+                    "output_tokens": 10,
+                    "total_tokens": 30,
+                    "estimated_cost_usd": 0.000024,
+                },
+            }
+        ]
+    )
+
+    assert isinstance(pdf_output, bytes)
+    assert len(pdf_output) > 0
+
+
+def test_normalize_text_for_pdf_replaces_common_unicode_punctuation() -> None:
+    normalized = normalize_text_for_pdf(
+        'Smart “quotes”, apostrophes ’, joined—words, ranged–text, bullet •, ellipsis …, and\xa0space.'
+    )
+
+    assert normalized == (
+        'Smart "quotes", apostrophes \', joined words, ranged text, bullet -, ellipsis ..., and space.'
+    )
+
+
+def test_clean_markdown_text_for_pdf_removes_basic_markdown_artifacts() -> None:
+    cleaned = clean_markdown_text_for_pdf(
+        "### Retrieval Tips\nUse **Chroma** carefully.\n---\n## Notes\nKeep it simple."
+    )
+
+    assert cleaned == "Retrieval Tips\nUse Chroma carefully.\nNotes\nKeep it simple."
+
+
+def test_build_pdf_detail_lines_formats_readable_bullet_sections() -> None:
+    lines = build_pdf_detail_lines(
+        "Tool result",
+        {
+            "tool_name": "estimate_openai_cost",
+            "tool_error": None,
+        },
+    )
+
+    assert lines == [
+        "Tool result:",
+        "- Tool name: estimate_openai_cost",
+        "- Tool error: none",
+    ]
+
+
+def test_build_pdf_detail_lines_formats_missing_estimated_cost_as_na() -> None:
+    lines = build_pdf_detail_lines(
+        "Usage",
+        {
+            "model_name": "gpt-4.1-mini",
+            "estimated_cost_usd": None,
+        },
+    )
+
+    assert lines == [
+        "Usage:",
+        "- Model name: gpt-4.1-mini",
+        "- Estimated cost USD: N/A",
+    ]
+
+
+def test_build_pdf_detail_lines_formats_numeric_estimated_cost_stably() -> None:
+    lines = build_pdf_detail_lines(
+        "Usage",
+        {
+            "estimated_cost_usd": 0.000024,
+        },
+    )
+
+    assert lines == [
+        "Usage:",
+        "- Estimated cost USD: 0.000024",
+    ]
+
+
+def test_build_conversation_pdf_handles_unicode_content_across_turn_types() -> None:
+    pdf_output = build_conversation_pdf(
+        [
+            {
+                "query": "How should I persist Chroma — locally?",
+                "answer": 'Use a "stable" directory - do not rebuild on every run.',
+                "used_context": True,
+                "sources": ["Chroma Persistence Guide — intro"],
+                "tool_result": None,
+                "usage": {
+                    "model_name": "gpt-4.1-mini — preview",
+                    "input_tokens": 20,
+                    "output_tokens": 10,
+                    "total_tokens": 30,
+                    "estimated_cost_usd": 0.000024,
+                },
+            },
+            {
+                "query": "Estimate OpenAI cost",
+                "answer": "Answered with a built-in tool.",
+                "used_context": False,
+                "sources": [],
+                "tool_result": {
+                    "tool_name": "estimate_openai_cost",
+                    "tool_error": "Temporary issue — try again…",
+                },
+                "usage": None,
+            },
+            {
+                "query": "What is the capital of France?",
+                "answer": "No usable knowledge-base context found — grounded answer skipped.",
+                "used_context": False,
+                "sources": [],
+                "tool_result": None,
+                "usage": None,
+            },
+        ]
+    )
+
+    assert isinstance(pdf_output, bytes)
+    assert len(pdf_output) > 0
+    assert pdf_output.startswith(b"%PDF")
+
+
+def test_get_export_artifact_returns_expected_filename_and_mime_type_per_format() -> None:
+    conversation_history = [
+        {
+            "query": "How should I persist Chroma locally?",
+            "answer": "Persist the collection in a stable directory.",
+            "used_context": True,
+            "sources": ["Chroma Persistence and Reindexing Guide"],
+            "tool_result": None,
+            "usage": None,
+        }
+    ]
+
+    markdown_artifact = get_export_artifact(conversation_history, "Markdown")
+    json_artifact = get_export_artifact(conversation_history, "JSON")
+    csv_artifact = get_export_artifact(conversation_history, "CSV")
+    pdf_artifact = get_export_artifact(conversation_history, "PDF")
+
+    assert markdown_artifact["file_name"] == "conversation_export.md"
+    assert markdown_artifact["mime"] == "text/markdown"
+    assert json_artifact["file_name"] == "conversation_export.json"
+    assert json_artifact["mime"] == "application/json"
+    assert csv_artifact["file_name"] == "conversation_export.csv"
+    assert csv_artifact["mime"] == "text/csv"
+    assert pdf_artifact["file_name"] == "conversation_export.pdf"
+    assert pdf_artifact["mime"] == "application/pdf"
+    assert isinstance(pdf_artifact["data"], bytes)
 
 
 def test_parse_source_string_extracts_title_metadata_and_path() -> None:

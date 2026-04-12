@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import csv
 import json
+import io
+import re
 import time
 
 import streamlit as st
+from fpdf import FPDF
 from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
@@ -17,6 +21,21 @@ from src.schemas import AnswerResult
 
 DEFAULT_CHAT_MODEL = "gpt-4.1-mini"
 PREVIEW_LENGTH = 80
+EXPORT_FORMAT_OPTIONS = ("Markdown", "JSON", "CSV", "PDF")
+PDF_TEXT_REPLACEMENTS = str.maketrans(
+    {
+        "\u00a0": " ",
+        "\u200b": "",
+        "\u2013": " ",
+        "\u2014": " ",
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2022": "-",
+        "\u2026": "...",
+    }
+)
 
 
 class AppValidationError(ValueError):
@@ -66,7 +85,6 @@ def render_latest_turn() -> None:
             st.write(turn["answer"])
             with st.expander("How This Answer Was Generated"):
                 st.write(get_response_generation_explanation(turn))
-            st.caption(format_request_usage_label(turn))
             if turn["tool_result"]:
                 with st.expander("Tool Result"):
                     st.json(turn["tool_result"])
@@ -83,6 +101,7 @@ def render_latest_turn() -> None:
                             st.caption(" | ".join(source_display["metadata_fragments"]))
                         if source_display["source_path"] is not None:
                             st.caption(f"Path: {source_display['source_path']}")
+            st.caption(format_request_usage_label(turn))
 
 
 def validate_query(raw_query: str, *, max_length: int) -> str:
@@ -380,6 +399,218 @@ def build_conversation_json(conversation_history: list[dict[str, object]]) -> st
     return json.dumps(payload, indent=2) + "\n"
 
 
+def build_conversation_csv(conversation_history: list[dict[str, object]]) -> str:
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "turn_index",
+            "query",
+            "answer",
+            "response_type",
+            "used_context",
+            "sources",
+            "tool_name",
+            "tool_result_json",
+            "usage_model_name",
+            "usage_input_tokens",
+            "usage_output_tokens",
+            "usage_total_tokens",
+            "usage_estimated_cost_usd",
+        ],
+    )
+    writer.writeheader()
+
+    for index, turn in enumerate(conversation_history, start=1):
+        tool_result = turn.get("tool_result")
+        usage = turn.get("usage")
+        writer.writerow(
+            {
+                "turn_index": index,
+                "query": turn["query"],
+                "answer": turn["answer"],
+                "response_type": get_response_type_label(turn),
+                "used_context": turn["used_context"],
+                "sources": " | ".join(turn["sources"]),
+                "tool_name": (
+                    tool_result.get("tool_name")
+                    if isinstance(tool_result, dict)
+                    else ""
+                ),
+                "tool_result_json": (
+                    json.dumps(tool_result, separators=(",", ":"))
+                    if isinstance(tool_result, dict)
+                    else ""
+                ),
+                "usage_model_name": (
+                    usage.get("model_name")
+                    if isinstance(usage, dict)
+                    else ""
+                ),
+                "usage_input_tokens": (
+                    usage.get("input_tokens")
+                    if isinstance(usage, dict)
+                    else ""
+                ),
+                "usage_output_tokens": (
+                    usage.get("output_tokens")
+                    if isinstance(usage, dict)
+                    else ""
+                ),
+                "usage_total_tokens": (
+                    usage.get("total_tokens")
+                    if isinstance(usage, dict)
+                    else ""
+                ),
+                "usage_estimated_cost_usd": (
+                    usage.get("estimated_cost_usd")
+                    if isinstance(usage, dict)
+                    else ""
+                ),
+            }
+        )
+
+    return output.getvalue()
+
+
+def build_conversation_pdf(conversation_history: list[dict[str, object]]) -> bytes:
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12)
+    pdf.set_title(normalize_text_for_pdf("Conversation Export"))
+
+    pdf.set_font("Helvetica", style="B", size=14)
+    pdf.set_x(pdf.l_margin)
+    pdf.cell(0, 10, normalize_text_for_pdf("Conversation Export"))
+    pdf.ln(12)
+    pdf.set_font("Helvetica", size=11)
+
+    if not conversation_history:
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, 8, normalize_text_for_pdf("No conversation history available."))
+    else:
+        for index, turn in enumerate(conversation_history, start=1):
+            pdf.set_font("Helvetica", style="B", size=12)
+            pdf.set_x(pdf.l_margin)
+            pdf.cell(0, 8, normalize_text_for_pdf(f"Turn {index}"))
+            pdf.ln(8)
+            pdf.set_font("Helvetica", size=11)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 7, normalize_text_for_pdf(f"User question: {turn['query']}"))
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(
+                0,
+                7,
+                normalize_text_for_pdf(
+                    f"Response type: {get_response_type_label(turn)}"
+                ),
+            )
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(
+                0,
+                7,
+                normalize_text_for_pdf(
+                    f"Assistant answer: {clean_markdown_text_for_pdf(turn['answer'])}"
+                ),
+            )
+
+            if turn["sources"]:
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(0, 7, normalize_text_for_pdf("Sources:"))
+                for source in turn["sources"]:
+                    pdf.set_x(pdf.l_margin)
+                    pdf.multi_cell(0, 7, normalize_text_for_pdf(f"- {source}"))
+
+            if turn["tool_result"]:
+                for line in build_pdf_detail_lines("Tool result", turn["tool_result"]):
+                    pdf.set_x(pdf.l_margin)
+                    pdf.multi_cell(0, 7, normalize_text_for_pdf(line))
+
+            if turn["usage"]:
+                for line in build_pdf_detail_lines("Usage", turn["usage"]):
+                    pdf.set_x(pdf.l_margin)
+                    pdf.multi_cell(0, 7, normalize_text_for_pdf(line))
+
+            pdf.ln(3)
+
+    rendered = pdf.output()
+    if isinstance(rendered, bytearray):
+        return bytes(rendered)
+    if isinstance(rendered, bytes):
+        return rendered
+    return rendered.encode("latin-1")
+
+
+def normalize_text_for_pdf(text: object) -> str:
+    normalized = str(text).translate(PDF_TEXT_REPLACEMENTS)
+    return normalized.encode("latin-1", errors="replace").decode("latin-1")
+
+
+def clean_markdown_text_for_pdf(text: object) -> str:
+    cleaned_lines: list[str] = []
+    for raw_line in str(text).splitlines():
+        line = re.sub(r"^\s{0,3}#{1,6}\s*", "", raw_line)
+        line = line.replace("**", "")
+        if re.fullmatch(r"\s*-{3,}\s*", line):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
+
+
+def build_pdf_detail_lines(title: str, data: dict[str, object]) -> list[str]:
+    lines = [f"{title}:"]
+    for key, value in data.items():
+        if key == "estimated_cost_usd":
+            label = "Estimated cost USD"
+            value_text = (
+                f"{value:.6f}"
+                if isinstance(value, int | float)
+                else "N/A"
+            )
+        else:
+            label = key.replace("_", " ").capitalize()
+            if isinstance(value, dict | list):
+                value_text = json.dumps(value, ensure_ascii=False)
+            elif value is None:
+                value_text = "none"
+            else:
+                value_text = str(value)
+        lines.append(f"- {label}: {value_text}")
+    return lines
+
+
+def get_export_artifact(
+    conversation_history: list[dict[str, object]],
+    export_format: str,
+) -> dict[str, object]:
+    if export_format == "Markdown":
+        return {
+            "data": build_conversation_markdown(conversation_history),
+            "file_name": "conversation_export.md",
+            "mime": "text/markdown",
+        }
+    if export_format == "JSON":
+        return {
+            "data": build_conversation_json(conversation_history),
+            "file_name": "conversation_export.json",
+            "mime": "application/json",
+        }
+    if export_format == "CSV":
+        return {
+            "data": build_conversation_csv(conversation_history),
+            "file_name": "conversation_export.csv",
+            "mime": "text/csv",
+        }
+    if export_format == "PDF":
+        return {
+            "data": build_conversation_pdf(conversation_history),
+            "file_name": "conversation_export.pdf",
+            "mime": "application/pdf",
+        }
+    raise ValueError(f"Unsupported export format: {export_format}")
+
+
 def render_help_section(
     conversation_history: list[dict[str, object]],
     kb_status: KBStatusResult,
@@ -397,19 +628,20 @@ def render_help_section(
             st.session_state["conversation_history"] = []
             st.rerun()
 
-        st.download_button(
-            "Export conversation (.md)",
-            data=build_conversation_markdown(conversation_history),
-            file_name="conversation_export.md",
-            mime="text/markdown",
-            disabled=not conversation_history,
-            use_container_width=True,
+        selected_export_format = st.selectbox(
+            "Export format",
+            EXPORT_FORMAT_OPTIONS,
+            index=0,
+        )
+        export_artifact = get_export_artifact(
+            conversation_history,
+            selected_export_format,
         )
         st.download_button(
-            "Export conversation (.json)",
-            data=build_conversation_json(conversation_history),
-            file_name="conversation_export.json",
-            mime="application/json",
+            "Download conversation export",
+            data=export_artifact["data"],
+            file_name=export_artifact["file_name"],
+            mime=export_artifact["mime"],
             disabled=not conversation_history,
             use_container_width=True,
         )
