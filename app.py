@@ -397,8 +397,10 @@ def get_help_content() -> dict[str, list[str] | str]:
         "example_questions": [
             "How should I persist and rebuild the Chroma index locally?",
             "How should I display retrieved sources in a Streamlit chat interface?",
-            "Estimate OpenAI cost: model=gpt-4.1-mini, input_tokens=1000, output_tokens=500, num_calls=3",
+            "Estimate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, 500 output tokens, and 3 calls",
+            "Alternative format: model=gpt-4.1-mini, input_tokens=1000, output_tokens=500, num_calls=3",
         ],
+        "examples_intro": "You can ask natural questions or use structured inputs for tools.",
         "response_types": [
             "Grounded answer: generated from retrieved knowledge-base context.",
             "Tool result: returned by one structured rule-based tool.",
@@ -824,19 +826,20 @@ def render_help_section(
             disabled=not conversation_history,
             use_container_width=True,
         )
-        st.caption("Session LLM usage (tracked)")
-        st.caption(format_session_usage_label(conversation_history))
-
         with st.expander("Help & Guide", expanded=False):
             st.write(help_content["helps_with"])
             st.caption("Out of scope")
             st.write(help_content["out_of_scope"])
+            st.write(help_content["examples_intro"])
             st.caption("Example questions")
             for question in help_content["example_questions"]:
                 st.write(f"- {question}")
             st.caption("How to read responses")
             for item in help_content["response_types"]:
                 st.write(f"- {item}")
+
+        st.caption("Session LLM usage (tracked)")
+        st.caption(format_session_usage_label(conversation_history))
 
 
 def main() -> None:

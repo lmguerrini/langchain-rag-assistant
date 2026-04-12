@@ -247,7 +247,14 @@ def test_get_help_content_includes_practical_sections() -> None:
 
     assert "LangChain-based RAG application design" in content["helps_with"]
     assert "Out of scope" not in content["out_of_scope"]
-    assert len(content["example_questions"]) >= 3
+    assert (
+        content["examples_intro"]
+        == "You can ask natural questions or use structured inputs for tools."
+    )
+    assert content["example_questions"][-2:] == [
+        "Estimate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, 500 output tokens, and 3 calls",
+        "Alternative format: model=gpt-4.1-mini, input_tokens=1000, output_tokens=500, num_calls=3",
+    ]
     assert any("Grounded answer" in item for item in content["response_types"])
 
 
