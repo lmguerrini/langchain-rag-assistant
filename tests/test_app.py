@@ -7,10 +7,14 @@ from app import (
     build_turn_record,
     format_kb_status_label,
     format_request_usage_label,
+    format_source_display,
     format_session_usage_label,
+    get_response_generation_explanation,
     get_help_content,
+    get_response_summary_line,
     get_response_type_label,
     get_user_facing_error_message,
+    parse_source_string,
     validate_query,
 )
 from src.kb_status import KBStatusResult
@@ -109,6 +113,75 @@ def test_get_response_type_label_maps_turn_variants() -> None:
     ) == "No-context fallback"
 
 
+def test_get_response_summary_line_maps_turn_variants() -> None:
+    assert get_response_summary_line(
+        {
+            "query": "q",
+            "answer": "a",
+            "used_context": True,
+            "sources": ["s"],
+            "tool_result": None,
+        }
+    ) == "Used knowledge-base sources."
+    assert get_response_summary_line(
+        {
+            "query": "q",
+            "answer": "a",
+            "used_context": False,
+            "sources": [],
+            "tool_result": {"tool_name": "estimate_openai_cost"},
+        }
+    ) == "Answered with a built-in tool."
+    assert get_response_summary_line(
+        {
+            "query": "q",
+            "answer": "a",
+            "used_context": False,
+            "sources": [],
+            "tool_result": None,
+        }
+    ) == "No usable knowledge-base context found."
+
+
+def test_get_response_generation_explanation_maps_turn_variants() -> None:
+    assert get_response_generation_explanation(
+        {
+            "query": "q",
+            "answer": "a",
+            "used_context": True,
+            "sources": ["s"],
+            "tool_result": None,
+        }
+    ) == (
+        "The app used knowledge-base context to generate this answer. "
+        "The sources below show what grounded the response."
+    )
+    assert get_response_generation_explanation(
+        {
+            "query": "q",
+            "answer": "a",
+            "used_context": False,
+            "sources": [],
+            "tool_result": {"tool_name": "estimate_openai_cost"},
+        }
+    ) == (
+        "A built-in tool handled this request directly, so the app did not "
+        "generate a knowledge-base-grounded answer."
+    )
+    assert get_response_generation_explanation(
+        {
+            "query": "q",
+            "answer": "a",
+            "used_context": False,
+            "sources": [],
+            "tool_result": None,
+        }
+    ) == (
+        "The app could not find usable knowledge-base context for this question, "
+        "so it did not generate a grounded answer."
+    )
+
+
 def test_get_help_content_includes_practical_sections() -> None:
     content = get_help_content()
 
@@ -171,6 +244,70 @@ def test_build_conversation_markdown_formats_grounded_tool_and_fallback_turns() 
     assert "**Response type:** Tool result" in markdown
     assert "- tool_name: estimate_openai_cost" in markdown
     assert "**Response type:** No-context fallback" in markdown
+
+
+def test_parse_source_string_extracts_title_metadata_and_path() -> None:
+    parsed = parse_source_string(
+        "Streamlit Chat Patterns | topic=streamlit | library=streamlit | "
+        "doc_type=example | difficulty=intermediate | "
+        "source=data/raw/streamlit_chat_patterns.md | chunk=0 | error_family=ui"
+    )
+
+    assert parsed == {
+        "title": "Streamlit Chat Patterns",
+        "metadata": {
+            "topic": "streamlit",
+            "library": "streamlit",
+            "doc_type": "example",
+            "difficulty": "intermediate",
+            "source": "data/raw/streamlit_chat_patterns.md",
+            "chunk": "0",
+            "error_family": "ui",
+        },
+    }
+
+
+def test_format_source_display_returns_readable_fragments() -> None:
+    source_display = format_source_display(
+        "Chroma Persistence Guide | topic=chroma | library=chroma | "
+        "doc_type=how_to | difficulty=intro | "
+        "source=data/raw/chroma_persistence_guide.md | chunk=0 | "
+        "error_family=persistence"
+    )
+
+    assert source_display == {
+        "title": "Chroma Persistence Guide",
+        "metadata_fragments": [
+            "Topic: chroma",
+            "Library: chroma",
+            "Type: how_to",
+            "Difficulty: intro",
+            "Chunk: 0",
+            "Error family: persistence",
+        ],
+        "source_path": "data/raw/chroma_persistence_guide.md",
+        "raw_source": (
+            "Chroma Persistence Guide | topic=chroma | library=chroma | "
+            "doc_type=how_to | difficulty=intro | "
+            "source=data/raw/chroma_persistence_guide.md | chunk=0 | "
+            "error_family=persistence"
+        ),
+        "parse_failed": False,
+    }
+
+
+def test_format_source_display_falls_back_safely_for_malformed_source_string() -> None:
+    source_display = format_source_display(
+        "Streamlit Chat Patterns | topic=streamlit | malformed-fragment"
+    )
+
+    assert source_display == {
+        "title": "Source",
+        "metadata_fragments": [],
+        "source_path": None,
+        "raw_source": "Streamlit Chat Patterns | topic=streamlit | malformed-fragment",
+        "parse_failed": True,
+    }
 
 
 def test_format_request_usage_label_handles_grounded_tool_and_fallback_turns() -> None:

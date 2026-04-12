@@ -61,7 +61,10 @@ def render_latest_turn() -> None:
 
         with st.chat_message("assistant"):
             st.caption(f"Response type: {get_response_type_label(turn)}")
+            st.caption(get_response_summary_line(turn))
             st.write(turn["answer"])
+            with st.expander("How This Answer Was Generated"):
+                st.write(get_response_generation_explanation(turn))
             st.caption(format_request_usage_label(turn))
             if turn["tool_result"]:
                 with st.expander("Tool Result"):
@@ -69,7 +72,16 @@ def render_latest_turn() -> None:
             if turn["sources"]:
                 with st.expander("Sources"):
                     for source in turn["sources"]:
-                        st.write(f"- {source}")
+                        source_display = format_source_display(source)
+                        if source_display["parse_failed"]:
+                            st.write(source_display["raw_source"])
+                            continue
+
+                        st.markdown(f"**{source_display['title']}**")
+                        if source_display["metadata_fragments"]:
+                            st.caption(" | ".join(source_display["metadata_fragments"]))
+                        if source_display["source_path"] is not None:
+                            st.caption(f"Path: {source_display['source_path']}")
 
 
 def validate_query(raw_query: str, *, max_length: int) -> str:
@@ -127,6 +139,31 @@ def get_response_type_label(turn: dict[str, object]) -> str:
     return "No-context fallback"
 
 
+def get_response_summary_line(turn: dict[str, object]) -> str:
+    if turn["tool_result"]:
+        return "Answered with a built-in tool."
+    if turn["used_context"]:
+        return "Used knowledge-base sources."
+    return "No usable knowledge-base context found."
+
+
+def get_response_generation_explanation(turn: dict[str, object]) -> str:
+    if turn["tool_result"]:
+        return (
+            "A built-in tool handled this request directly, so the app did not "
+            "generate a knowledge-base-grounded answer."
+        )
+    if turn["used_context"]:
+        return (
+            "The app used knowledge-base context to generate this answer. "
+            "The sources below show what grounded the response."
+        )
+    return (
+        "The app could not find usable knowledge-base context for this question, "
+        "so it did not generate a grounded answer."
+    )
+
+
 def format_request_usage_label(turn: dict[str, object]) -> str:
     if turn["tool_result"] is not None or turn["used_context"] is False:
         return "No LLM usage"
@@ -147,6 +184,57 @@ def format_request_usage_label(turn: dict[str, object]) -> str:
         f"{usage['input_tokens']} in / {usage['output_tokens']} out / "
         f"{usage['total_tokens']} total | {cost_text}"
     )
+
+
+def parse_source_string(source: str) -> dict[str, object] | None:
+    segments = [segment.strip() for segment in source.split("|")]
+    if not segments or not segments[0]:
+        return None
+
+    title = segments[0]
+    metadata: dict[str, str] = {}
+    for segment in segments[1:]:
+        if not segment:
+            continue
+        if "=" not in segment:
+            return None
+        key, value = segment.split("=", 1)
+        cleaned_key = key.strip()
+        cleaned_value = value.strip()
+        if not cleaned_key or not cleaned_value:
+            return None
+        metadata[cleaned_key] = cleaned_value
+
+    return {
+        "title": title,
+        "metadata": metadata,
+    }
+
+
+def format_source_display(source: str) -> dict[str, object]:
+    parsed = parse_source_string(source)
+    if parsed is None:
+        return {
+            "title": "Source",
+            "metadata_fragments": [],
+            "source_path": None,
+            "raw_source": source,
+            "parse_failed": True,
+        }
+
+    metadata = parsed["metadata"]
+    metadata_fragments = [
+        _format_source_metadata_fragment(key, value)
+        for key, value in metadata.items()
+        if key != "source"
+    ]
+    return {
+        "title": parsed["title"],
+        "metadata_fragments": metadata_fragments,
+        "source_path": metadata.get("source"),
+        "raw_source": source,
+        "parse_failed": False,
+    }
 
 
 def build_session_usage_totals(
@@ -189,6 +277,19 @@ def format_session_usage_label(conversation_history: list[dict[str, object]]) ->
         f"{totals['request_count']} requests | "
         f"{totals['total_tokens']} total tokens | {cost_text}"
     )
+
+
+def _format_source_metadata_fragment(key: str, value: str) -> str:
+    labels = {
+        "topic": "Topic",
+        "library": "Library",
+        "doc_type": "Type",
+        "difficulty": "Difficulty",
+        "error_family": "Error family",
+        "chunk": "Chunk",
+    }
+    label = labels.get(key, key.replace("_", " ").title())
+    return f"{label}: {value}"
 
 
 def get_help_content() -> dict[str, list[str] | str]:
