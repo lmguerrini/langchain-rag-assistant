@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 
 import streamlit as st
@@ -359,6 +360,26 @@ def build_conversation_markdown(conversation_history: list[dict[str, object]]) -
     return "\n".join(lines).strip() + "\n"
 
 
+def build_conversation_json(conversation_history: list[dict[str, object]]) -> str:
+    payload = {
+        "export_format": "json",
+        "turn_count": len(conversation_history),
+        "turns": [
+            {
+                "query": turn["query"],
+                "answer": turn["answer"],
+                "response_type": get_response_type_label(turn),
+                "used_context": turn["used_context"],
+                "sources": turn["sources"],
+                "tool_result": turn["tool_result"],
+                "usage": turn["usage"],
+            }
+            for turn in conversation_history
+        ],
+    }
+    return json.dumps(payload, indent=2) + "\n"
+
+
 def render_help_section(
     conversation_history: list[dict[str, object]],
     kb_status: KBStatusResult,
@@ -381,6 +402,14 @@ def render_help_section(
             data=build_conversation_markdown(conversation_history),
             file_name="conversation_export.md",
             mime="text/markdown",
+            disabled=not conversation_history,
+            use_container_width=True,
+        )
+        st.download_button(
+            "Export conversation (.json)",
+            data=build_conversation_json(conversation_history),
+            file_name="conversation_export.json",
+            mime="application/json",
             disabled=not conversation_history,
             use_container_width=True,
         )

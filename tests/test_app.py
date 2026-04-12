@@ -1,7 +1,10 @@
+import json
+
 import pytest
 
 from app import (
     AppValidationError,
+    build_conversation_json,
     build_conversation_markdown,
     build_session_usage_totals,
     build_turn_record,
@@ -244,6 +247,113 @@ def test_build_conversation_markdown_formats_grounded_tool_and_fallback_turns() 
     assert "**Response type:** Tool result" in markdown
     assert "- tool_name: estimate_openai_cost" in markdown
     assert "**Response type:** No-context fallback" in markdown
+
+
+def test_build_conversation_json_handles_empty_history() -> None:
+    payload = json.loads(build_conversation_json([]))
+
+    assert payload == {
+        "export_format": "json",
+        "turn_count": 0,
+        "turns": [],
+    }
+
+
+def test_build_conversation_json_formats_grounded_answer_turn() -> None:
+    payload = json.loads(
+        build_conversation_json(
+            [
+                {
+                    "query": "How should I persist Chroma locally?",
+                    "answer": "Persist the collection in a stable directory.",
+                    "used_context": True,
+                    "sources": ["Chroma Persistence and Reindexing Guide"],
+                    "tool_result": None,
+                    "usage": {
+                        "model_name": "gpt-4.1-mini",
+                        "input_tokens": 20,
+                        "output_tokens": 10,
+                        "total_tokens": 30,
+                        "estimated_cost_usd": 0.000024,
+                    },
+                }
+            ]
+        )
+    )
+
+    assert payload["export_format"] == "json"
+    assert payload["turn_count"] == 1
+    assert payload["turns"][0]["response_type"] == "Grounded answer"
+    assert payload["turns"][0]["sources"] == ["Chroma Persistence and Reindexing Guide"]
+    assert payload["turns"][0]["usage"] == {
+        "model_name": "gpt-4.1-mini",
+        "input_tokens": 20,
+        "output_tokens": 10,
+        "total_tokens": 30,
+        "estimated_cost_usd": 0.000024,
+    }
+
+
+def test_build_conversation_json_formats_tool_result_turn() -> None:
+    payload = json.loads(
+        build_conversation_json(
+            [
+                {
+                    "query": "Estimate OpenAI cost",
+                    "answer": "Estimated total OpenAI cost: $0.002400 for model gpt-4.1-mini.",
+                    "used_context": False,
+                    "sources": [],
+                    "tool_result": {
+                        "tool_name": "estimate_openai_cost",
+                        "tool_error": None,
+                    },
+                    "usage": None,
+                }
+            ]
+        )
+    )
+
+    assert payload["turn_count"] == 1
+    assert payload["turns"][0]["response_type"] == "Tool result"
+    assert payload["turns"][0]["tool_result"] == {
+        "tool_name": "estimate_openai_cost",
+        "tool_error": None,
+    }
+    assert payload["turns"][0]["usage"] is None
+
+
+def test_build_conversation_json_formats_no_context_fallback_turn() -> None:
+    payload = json.loads(
+        build_conversation_json(
+            [
+                {
+                    "query": "What is the capital of France?",
+                    "answer": (
+                        "I could not find enough relevant context in the knowledge base "
+                        "to answer that safely."
+                    ),
+                    "used_context": False,
+                    "sources": [],
+                    "tool_result": None,
+                    "usage": None,
+                }
+            ]
+        )
+    )
+
+    assert payload["turn_count"] == 1
+    assert payload["turns"][0] == {
+        "query": "What is the capital of France?",
+        "answer": (
+            "I could not find enough relevant context in the knowledge base "
+            "to answer that safely."
+        ),
+        "response_type": "No-context fallback",
+        "used_context": False,
+        "sources": [],
+        "tool_result": None,
+        "usage": None,
+    }
 
 
 def test_parse_source_string_extracts_title_metadata_and_path() -> None:
