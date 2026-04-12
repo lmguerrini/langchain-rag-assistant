@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from src.chains import run_backend_query
 from src.config import get_settings
+from src.kb_status import KBStatusResult, get_kb_status
 from src.logger import configure_logging, get_logger
 from src.rate_limit import apply_rate_limit
 from src.schemas import AnswerResult
@@ -213,6 +214,15 @@ def get_help_content() -> dict[str, list[str] | str]:
     }
 
 
+def format_kb_status_label(status: KBStatusResult) -> str:
+    labels = {
+        "missing": "Missing",
+        "up_to_date": "Up to date",
+        "outdated": "Outdated",
+    }
+    return f"Status: {labels[status.state]}"
+
+
 def build_conversation_markdown(conversation_history: list[dict[str, object]]) -> str:
     lines = ["# Conversation Export", ""]
     if not conversation_history:
@@ -248,9 +258,18 @@ def build_conversation_markdown(conversation_history: list[dict[str, object]]) -
     return "\n".join(lines).strip() + "\n"
 
 
-def render_help_section(conversation_history: list[dict[str, object]]) -> None:
+def render_help_section(
+    conversation_history: list[dict[str, object]],
+    kb_status: KBStatusResult,
+) -> None:
     help_content = get_help_content()
     with st.sidebar:
+        st.subheader("Knowledge Base")
+        st.write(format_kb_status_label(kb_status))
+        st.caption(kb_status.detail)
+        if kb_status.rebuild_command is not None:
+            st.caption(f"Rebuild manually: `{kb_status.rebuild_command}`")
+
         st.subheader("Chat Controls")
         if st.button("Clear chat", use_container_width=True):
             st.session_state["conversation_history"] = []
@@ -294,7 +313,8 @@ def main() -> None:
     if "request_timestamps" not in st.session_state:
         st.session_state["request_timestamps"] = []
 
-    render_help_section(st.session_state["conversation_history"])
+    kb_status = get_kb_status(settings)
+    render_help_section(st.session_state["conversation_history"], kb_status)
 
     render_latest_turn()
 

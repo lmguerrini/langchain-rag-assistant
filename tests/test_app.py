@@ -5,6 +5,7 @@ from app import (
     build_conversation_markdown,
     build_session_usage_totals,
     build_turn_record,
+    format_kb_status_label,
     format_request_usage_label,
     format_session_usage_label,
     get_help_content,
@@ -12,6 +13,7 @@ from app import (
     get_user_facing_error_message,
     validate_query,
 )
+from src.kb_status import KBStatusResult
 from src.schemas import AnswerResult, RequestUsage
 
 
@@ -114,6 +116,16 @@ def test_get_help_content_includes_practical_sections() -> None:
     assert "Out of scope" not in content["out_of_scope"]
     assert len(content["example_questions"]) >= 3
     assert any("Grounded answer" in item for item in content["response_types"])
+
+
+def test_format_kb_status_label_uses_readable_state_text() -> None:
+    status = KBStatusResult(
+        state="up_to_date",
+        summary="Knowledge base is up to date.",
+        detail="The local Chroma index matches the current raw markdown snapshot.",
+    )
+
+    assert format_kb_status_label(status) == "Status: Up to date"
 
 
 def test_build_conversation_markdown_handles_empty_history() -> None:
