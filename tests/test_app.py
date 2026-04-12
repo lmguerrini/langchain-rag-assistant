@@ -1,19 +1,24 @@
 import csv
 import io
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app import (
     AppValidationError,
-    clean_markdown_text_for_pdf,
+    build_chat_model_cache_inputs,
     build_conversation_csv,
     build_conversation_json,
     build_conversation_markdown,
     build_conversation_pdf,
+    build_conversation_snapshot,
     build_pdf_detail_lines,
     build_session_usage_totals,
     build_turn_record,
+    build_vector_store_cache_inputs,
+    clean_markdown_text_for_pdf,
     format_kb_status_label,
     format_request_usage_label,
     format_source_display,
@@ -30,6 +35,11 @@ from app import (
 )
 from src.kb_status import KBStatusResult
 from src.schemas import AnswerResult, RequestUsage
+
+
+class FakeSettings(SimpleNamespace):
+    def ensure_openai_api_key(self) -> str:
+        return self.openai_api_key
 
 
 def test_validate_query_trims_whitespace() -> None:
@@ -255,6 +265,74 @@ def test_build_conversation_markdown_formats_grounded_tool_and_fallback_turns() 
     assert "**Response type:** Tool result" in markdown
     assert "- tool_name: estimate_openai_cost" in markdown
     assert "**Response type:** No-context fallback" in markdown
+
+
+def test_build_conversation_snapshot_is_stable_for_equivalent_turns() -> None:
+    first_history = [
+        {
+            "query": "How should I persist Chroma locally?",
+            "answer": "Persist the collection in a stable directory.",
+            "used_context": True,
+            "sources": ["Chroma Persistence and Reindexing Guide"],
+            "tool_result": None,
+            "usage": {
+                "model_name": "gpt-4.1-mini",
+                "input_tokens": 20,
+                "output_tokens": 10,
+                "total_tokens": 30,
+                "estimated_cost_usd": 0.000024,
+            },
+        }
+    ]
+    second_history = [
+        {
+            "usage": {
+                "total_tokens": 30,
+                "estimated_cost_usd": 0.000024,
+                "output_tokens": 10,
+                "input_tokens": 20,
+                "model_name": "gpt-4.1-mini",
+            },
+            "tool_result": None,
+            "sources": ["Chroma Persistence and Reindexing Guide"],
+            "used_context": True,
+            "answer": "Persist the collection in a stable directory.",
+            "query": "How should I persist Chroma locally?",
+        }
+    ]
+
+    assert build_conversation_snapshot(first_history) == build_conversation_snapshot(
+        second_history
+    )
+
+
+def test_build_conversation_snapshot_changes_when_conversation_changes() -> None:
+    first_snapshot = build_conversation_snapshot(
+        [
+            {
+                "query": "How should I persist Chroma locally?",
+                "answer": "Persist the collection in a stable directory.",
+                "used_context": True,
+                "sources": ["Chroma Persistence and Reindexing Guide"],
+                "tool_result": None,
+                "usage": None,
+            }
+        ]
+    )
+    second_snapshot = build_conversation_snapshot(
+        [
+            {
+                "query": "How should I persist Chroma locally?",
+                "answer": "Use a durable persist directory.",
+                "used_context": True,
+                "sources": ["Chroma Persistence and Reindexing Guide"],
+                "tool_result": None,
+                "usage": None,
+            }
+        ]
+    )
+
+    assert first_snapshot != second_snapshot
 
 
 def test_build_conversation_json_handles_empty_history() -> None:
@@ -636,6 +714,82 @@ def test_get_export_artifact_returns_expected_filename_and_mime_type_per_format(
     assert pdf_artifact["file_name"] == "conversation_export.pdf"
     assert pdf_artifact["mime"] == "application/pdf"
     assert isinstance(pdf_artifact["data"], bytes)
+
+
+def test_get_export_artifact_data_changes_when_conversation_changes() -> None:
+    first_artifact = get_export_artifact(
+        [
+            {
+                "query": "How should I persist Chroma locally?",
+                "answer": "Persist the collection in a stable directory.",
+                "used_context": True,
+                "sources": ["Chroma Persistence Guide"],
+                "tool_result": None,
+                "usage": None,
+            }
+        ],
+        "Markdown",
+    )
+    second_artifact = get_export_artifact(
+        [
+            {
+                "query": "How should I persist Chroma locally?",
+                "answer": "Use a durable persist directory instead.",
+                "used_context": True,
+                "sources": ["Chroma Persistence Guide"],
+                "tool_result": None,
+                "usage": None,
+            }
+        ],
+        "Markdown",
+    )
+
+    assert first_artifact["data"] != second_artifact["data"]
+
+
+def test_get_export_artifact_data_changes_when_format_changes() -> None:
+    conversation_history = [
+        {
+            "query": "How should I persist Chroma locally?",
+            "answer": "Persist the collection in a stable directory.",
+            "used_context": True,
+            "sources": ["Chroma Persistence Guide"],
+            "tool_result": None,
+            "usage": None,
+        }
+    ]
+
+    markdown_artifact = get_export_artifact(conversation_history, "Markdown")
+    json_artifact = get_export_artifact(conversation_history, "JSON")
+
+    assert markdown_artifact["data"] != json_artifact["data"]
+    assert markdown_artifact["file_name"] != json_artifact["file_name"]
+
+
+def test_build_vector_store_cache_inputs_reflects_settings_values() -> None:
+    settings = FakeSettings(
+        chroma_persist_dir=Path("data/custom_db"),
+        chroma_collection_name="custom_collection",
+        embedding_model="text-embedding-3-large",
+        openai_api_key="key-123",
+    )
+
+    assert build_vector_store_cache_inputs(settings) == {
+        "persist_directory": "data/custom_db",
+        "collection_name": "custom_collection",
+        "embedding_model": "text-embedding-3-large",
+        "api_key": "key-123",
+    }
+
+
+def test_build_chat_model_cache_inputs_reflects_settings_values() -> None:
+    settings = FakeSettings(openai_api_key="key-456")
+
+    assert build_chat_model_cache_inputs(settings) == {
+        "api_key": "key-456",
+        "model_name": "gpt-4.1-mini",
+        "temperature": 0,
+    }
 
 
 def test_parse_source_string_extracts_title_metadata_and_path() -> None:

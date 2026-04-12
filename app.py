@@ -12,7 +12,7 @@ from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from src.chains import run_backend_query
-from src.config import get_settings
+from src.config import Settings, get_settings
 from src.kb_status import KBStatusResult, get_kb_status
 from src.logger import configure_logging, get_logger
 from src.rate_limit import apply_rate_limit
@@ -46,28 +46,61 @@ LOGGER = get_logger(__name__)
 
 
 @st.cache_resource
-def get_vector_store() -> Chroma:
-    settings = get_settings()
-    api_key = settings.ensure_openai_api_key()
+def _build_cached_vector_store(
+    *,
+    persist_directory: str,
+    collection_name: str,
+    embedding_model: str,
+    api_key: str,
+) -> Chroma:
     embeddings = OpenAIEmbeddings(
         api_key=api_key,
-        model=settings.embedding_model,
+        model=embedding_model,
     )
     return Chroma(
-        collection_name=settings.chroma_collection_name,
+        collection_name=collection_name,
         embedding_function=embeddings,
-        persist_directory=str(settings.chroma_persist_dir),
+        persist_directory=persist_directory,
     )
+
+
+def build_vector_store_cache_inputs(settings: Settings) -> dict[str, str]:
+    return {
+        "persist_directory": str(settings.chroma_persist_dir),
+        "collection_name": settings.chroma_collection_name,
+        "embedding_model": settings.embedding_model,
+        "api_key": settings.ensure_openai_api_key(),
+    }
+
+
+def get_vector_store(settings: Settings) -> Chroma:
+    return _build_cached_vector_store(**build_vector_store_cache_inputs(settings))
 
 
 @st.cache_resource
-def get_chat_model() -> ChatOpenAI:
-    settings = get_settings()
+def _build_cached_chat_model(
+    *,
+    api_key: str,
+    model_name: str,
+    temperature: float,
+) -> ChatOpenAI:
     return ChatOpenAI(
-        api_key=settings.ensure_openai_api_key(),
-        model=DEFAULT_CHAT_MODEL,
-        temperature=0,
+        api_key=api_key,
+        model=model_name,
+        temperature=temperature,
     )
+
+
+def build_chat_model_cache_inputs(settings: Settings) -> dict[str, str | float]:
+    return {
+        "api_key": settings.ensure_openai_api_key(),
+        "model_name": DEFAULT_CHAT_MODEL,
+        "temperature": 0,
+    }
+
+
+def get_chat_model(settings: Settings) -> ChatOpenAI:
+    return _build_cached_chat_model(**build_chat_model_cache_inputs(settings))
 
 
 def render_latest_turn() -> None:
@@ -379,6 +412,15 @@ def build_conversation_markdown(conversation_history: list[dict[str, object]]) -
     return "\n".join(lines).strip() + "\n"
 
 
+def build_conversation_snapshot(conversation_history: list[dict[str, object]]) -> str:
+    return json.dumps(
+        conversation_history,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
 def build_conversation_json(conversation_history: list[dict[str, object]]) -> str:
     payload = {
         "export_format": "json",
@@ -580,31 +622,49 @@ def build_pdf_detail_lines(title: str, data: dict[str, object]) -> list[str]:
     return lines
 
 
+@st.cache_data
+def build_cached_export_data(
+    conversation_snapshot: str,
+    export_format: str,
+) -> str | bytes:
+    conversation_history = json.loads(conversation_snapshot)
+    if export_format == "Markdown":
+        return build_conversation_markdown(conversation_history)
+    if export_format == "JSON":
+        return build_conversation_json(conversation_history)
+    if export_format == "CSV":
+        return build_conversation_csv(conversation_history)
+    if export_format == "PDF":
+        return build_conversation_pdf(conversation_history)
+    raise ValueError(f"Unsupported export format: {export_format}")
+
+
 def get_export_artifact(
     conversation_history: list[dict[str, object]],
     export_format: str,
 ) -> dict[str, object]:
+    conversation_snapshot = build_conversation_snapshot(conversation_history)
     if export_format == "Markdown":
         return {
-            "data": build_conversation_markdown(conversation_history),
+            "data": build_cached_export_data(conversation_snapshot, export_format),
             "file_name": "conversation_export.md",
             "mime": "text/markdown",
         }
     if export_format == "JSON":
         return {
-            "data": build_conversation_json(conversation_history),
+            "data": build_cached_export_data(conversation_snapshot, export_format),
             "file_name": "conversation_export.json",
             "mime": "application/json",
         }
     if export_format == "CSV":
         return {
-            "data": build_conversation_csv(conversation_history),
+            "data": build_cached_export_data(conversation_snapshot, export_format),
             "file_name": "conversation_export.csv",
             "mime": "text/csv",
         }
     if export_format == "PDF":
         return {
-            "data": build_conversation_pdf(conversation_history),
+            "data": build_cached_export_data(conversation_snapshot, export_format),
             "file_name": "conversation_export.pdf",
             "mime": "application/pdf",
         }
@@ -711,8 +771,8 @@ def main() -> None:
                 return
 
             status.write("Loading resources")
-            vector_store = get_vector_store()
-            chat_model = get_chat_model()
+            vector_store = get_vector_store(settings)
+            chat_model = get_chat_model(settings)
             status.write("Processing request")
             result = run_backend_query(
                 query=validated_query,
