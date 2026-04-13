@@ -55,7 +55,7 @@ def send_mcp_jsonrpc_request(
         server_url,
         data=body,
         headers={
-            "Accept": "application/json",
+            "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -67,13 +67,7 @@ def send_mcp_jsonrpc_request(
     except (urllib_error.URLError, TimeoutError) as exc:
         raise RuntimeError(f"Official docs MCP request failed: {exc}") from exc
 
-    try:
-        rpc_payload = json.loads(response_body)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Official docs MCP response was not valid JSON.") from exc
-
-    if not isinstance(rpc_payload, Mapping):
-        raise RuntimeError("Official docs MCP response must be a JSON object.")
+    rpc_payload = _parse_jsonrpc_response_body(response_body)
 
     response_error = rpc_payload.get("error")
     if isinstance(response_error, Mapping):
@@ -85,6 +79,52 @@ def send_mcp_jsonrpc_request(
         raise RuntimeError("Official docs MCP response did not include a valid result object.")
 
     return dict(result)
+
+
+def _parse_jsonrpc_response_body(response_body: str) -> dict[str, object]:
+    direct_payload = _parse_json_object(response_body)
+    if direct_payload is not None:
+        return direct_payload
+
+    sse_payload = _parse_json_object_from_sse_body(response_body)
+    if sse_payload is not None:
+        return sse_payload
+
+    raise RuntimeError("Official docs MCP response was not valid JSON.")
+
+
+def _parse_json_object(response_body: str) -> dict[str, object] | None:
+    try:
+        parsed_payload = json.loads(response_body)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(parsed_payload, Mapping):
+        return None
+
+    return dict(parsed_payload)
+
+
+def _parse_json_object_from_sse_body(response_body: str) -> dict[str, object] | None:
+    data_lines: list[str] = []
+
+    for raw_line in response_body.splitlines():
+        stripped_line = raw_line.strip()
+        if not stripped_line:
+            if data_lines:
+                parsed_payload = _parse_json_object("\n".join(data_lines))
+                if parsed_payload is not None:
+                    return parsed_payload
+                data_lines = []
+            continue
+
+        if stripped_line.startswith("data:"):
+            data_lines.append(stripped_line.removeprefix("data:").strip())
+
+    if data_lines:
+        return _parse_json_object("\n".join(data_lines))
+
+    return None
 
 
 def lookup_langchain_official_docs(

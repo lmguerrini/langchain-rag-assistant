@@ -10,6 +10,7 @@ from src.official_docs_mcp_adapters import (
     REMOTE_MCP_UNAVAILABLE_MESSAGE,
     lookup_langchain_official_docs,
     lookup_openai_official_docs,
+    send_mcp_jsonrpc_request,
 )
 from src.official_docs_sources import (
     lookup_official_docs_documents,
@@ -119,6 +120,144 @@ def test_lookup_openai_official_docs_returns_normalized_documents() -> None:
     assert result.documents[0].title == "Streaming responses"
     assert result.documents[0].url == "https://developers.openai.com/docs/guides/streaming-responses"
     assert "partial response events" in result.documents[0].snippets[0].text
+
+
+def test_send_mcp_jsonrpc_request_uses_streamable_accept_header_and_parses_plain_json(
+    monkeypatch,
+) -> None:
+    captured_headers: dict[str, str] = {}
+
+    class StubResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"jsonrpc":"2.0","id":"request-1","result":{"tools":[]}}'
+
+    def fake_urlopen(request, timeout):
+        nonlocal captured_headers
+        captured_headers = dict(request.header_items())
+        assert timeout == 15.0
+        return StubResponse()
+
+    monkeypatch.setattr("src.official_docs_mcp_adapters.urllib_request.urlopen", fake_urlopen)
+
+    result = send_mcp_jsonrpc_request(
+        server_url="https://developers.openai.com/mcp",
+        method="tools/list",
+        params={},
+        timeout_seconds=15.0,
+    )
+
+    assert result == {"tools": []}
+    assert captured_headers["Accept"] == "application/json, text/event-stream"
+    assert captured_headers["Content-type"] == "application/json"
+
+
+def test_send_mcp_jsonrpc_request_parses_sse_json_body(monkeypatch) -> None:
+    class StubResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return (
+                b'event: message\n'
+                b'data: {"jsonrpc":"2.0","id":"request-1","result":{"tools":[]}}\n\n'
+            )
+
+    def fake_urlopen(request, timeout):
+        assert timeout == 15.0
+        return StubResponse()
+
+    monkeypatch.setattr("src.official_docs_mcp_adapters.urllib_request.urlopen", fake_urlopen)
+
+    result = send_mcp_jsonrpc_request(
+        server_url="https://developers.openai.com/mcp",
+        method="tools/list",
+        params={},
+        timeout_seconds=15.0,
+    )
+
+    assert result == {"tools": []}
+
+
+def test_send_mcp_jsonrpc_request_rejects_malformed_sse_body(monkeypatch) -> None:
+    class StubResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"event: message\ndata: not-json\n\n"
+
+    def fake_urlopen(request, timeout):
+        assert timeout == 15.0
+        return StubResponse()
+
+    monkeypatch.setattr("src.official_docs_mcp_adapters.urllib_request.urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="Official docs MCP response was not valid JSON."):
+        send_mcp_jsonrpc_request(
+            server_url="https://developers.openai.com/mcp",
+            method="tools/list",
+            params={},
+            timeout_seconds=15.0,
+        )
+
+
+def test_lookup_openai_official_docs_prefers_search_tool_when_multiple_tools_are_present() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do streaming responses work?",
+        library="openai",
+    )
+    tool_call_params: dict[str, object] | None = None
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        nonlocal tool_call_params
+        if method == "tools/list":
+            return {
+                "tools": [
+                    {"name": "list_openai_docs"},
+                    {"name": "search_openai_docs"},
+                    {"name": "fetch_openai_doc"},
+                ]
+            }
+        if method == "tools/call":
+            tool_call_params = params
+            return {
+                "structuredContent": {
+                    "hits": [
+                        {
+                            "url_without_anchor": (
+                                "https://developers.openai.com/docs/guides/streaming-responses"
+                            ),
+                            "content": "Use streaming to receive partial response events.",
+                            "hierarchy": {"lvl1": "Streaming responses"},
+                        }
+                    ]
+                }
+            }
+        raise AssertionError(f"Unexpected method: {method}")
+
+    result = lookup_openai_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert tool_call_params == {
+        "name": "search_openai_docs",
+        "arguments": {"query": "How do streaming responses work?"},
+    }
+    assert result.library == "openai"
+    assert result.documents[0].title == "Streaming responses"
 
 
 def test_lookup_streamlit_official_docs_uses_deterministic_fallback_manifest(tmp_path) -> None:
