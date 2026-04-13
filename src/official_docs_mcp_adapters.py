@@ -22,6 +22,26 @@ OPENAI_OFFICIAL_MCP_TOOL_NAME = "search_openai_docs"
 LANGCHAIN_ALLOWED_TOOL_NAMES = (LANGCHAIN_OFFICIAL_MCP_TOOL_NAME,)
 OPENAI_ALLOWED_TOOL_NAMES = (OPENAI_OFFICIAL_MCP_TOOL_NAME,)
 REMOTE_MCP_UNAVAILABLE_MESSAGE = "Remote MCP not available"
+LANGCHAIN_MAX_DOCUMENTS = 3
+LANGCHAIN_MAX_SNIPPETS_PER_DOCUMENT = 2
+LANGCHAIN_MAX_SNIPPET_LENGTH = 240
+LANGCHAIN_QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "documentation",
+    "docs",
+    "for",
+    "from",
+    "how",
+    "langchain",
+    "official",
+    "the",
+    "to",
+    "what",
+    "with",
+}
 OPENAI_MAX_DOCUMENTS = 3
 OPENAI_MAX_SNIPPETS_PER_DOCUMENT = 2
 OPENAI_MAX_SNIPPET_LENGTH = 240
@@ -175,6 +195,7 @@ def lookup_langchain_official_docs(
     )
 
     documents = _build_langchain_documents(tool_call_result)
+    documents = _shape_langchain_documents(documents, query=request.query)
     if not documents:
         raise ValueError("LangChain official docs MCP returned no usable documents.")
 
@@ -230,6 +251,146 @@ def _build_langchain_documents(result_payload: Mapping[str, object]) -> list[Off
         return _build_langchain_documents_from_content_blocks(content)
 
     raise ValueError("LangChain official docs MCP returned an unsupported response shape.")
+
+
+def _shape_langchain_documents(
+    documents: list[OfficialDocsDocument],
+    *,
+    query: str,
+) -> list[OfficialDocsDocument]:
+    deduped_documents = _dedupe_langchain_documents(documents)
+    query_tokens = _tokenize_langchain_query(query)
+
+    scored_documents: list[tuple[int, int, OfficialDocsDocument]] = []
+    for index, document in enumerate(deduped_documents):
+        score = _score_langchain_document(document, query_tokens=query_tokens)
+        scored_documents.append((score, index, document))
+
+    if any(score > 0 for score, _, _ in scored_documents):
+        selected_documents = [
+            document
+            for score, _, document in sorted(
+                (item for item in scored_documents if item[0] > 0),
+                key=lambda item: (-item[0], item[1]),
+            )[:LANGCHAIN_MAX_DOCUMENTS]
+        ]
+    else:
+        selected_documents = [
+            document
+            for _, _, document in scored_documents[:LANGCHAIN_MAX_DOCUMENTS]
+        ]
+
+    return [_compact_langchain_document(document) for document in selected_documents]
+
+
+def _dedupe_langchain_documents(documents: list[OfficialDocsDocument]) -> list[OfficialDocsDocument]:
+    merged_documents: dict[str, OfficialDocsDocument] = {}
+    ordered_urls: list[str] = []
+
+    for document in documents:
+        canonical_url = _canonicalize_langchain_url(document.url)
+        existing_document = merged_documents.get(canonical_url)
+        if existing_document is None:
+            merged_documents[canonical_url] = document
+            ordered_urls.append(canonical_url)
+            continue
+
+        merged_documents[canonical_url] = OfficialDocsDocument(
+            title=existing_document.title,
+            url=existing_document.url,
+            provider_mode=existing_document.provider_mode,
+            snippets=_merge_langchain_snippets(
+                existing_document.snippets,
+                document.snippets,
+            ),
+        )
+
+    return [merged_documents[url] for url in ordered_urls]
+
+
+def _merge_langchain_snippets(
+    left_snippets: list[OfficialDocsSnippet],
+    right_snippets: list[OfficialDocsSnippet],
+) -> list[OfficialDocsSnippet]:
+    merged_snippets: list[OfficialDocsSnippet] = []
+    seen_texts: set[str] = set()
+
+    for snippet in [*left_snippets, *right_snippets]:
+        if snippet.text in seen_texts:
+            continue
+        merged_snippets.append(
+            OfficialDocsSnippet(
+                text=snippet.text,
+                rank=len(merged_snippets) + 1,
+            )
+        )
+        seen_texts.add(snippet.text)
+
+    return merged_snippets
+
+
+def _score_langchain_document(
+    document: OfficialDocsDocument,
+    *,
+    query_tokens: set[str],
+) -> int:
+    if not query_tokens:
+        return 0
+
+    title_overlap = query_tokens & _tokenize_langchain_query(document.title)
+    url_overlap = query_tokens & _tokenize_langchain_query(document.url)
+    snippet_overlap = query_tokens & _tokenize_langchain_query(
+        " ".join(snippet.text for snippet in document.snippets)
+    )
+    return (len(title_overlap) * 3) + (len(url_overlap) * 2) + len(snippet_overlap)
+
+
+def _compact_langchain_document(document: OfficialDocsDocument) -> OfficialDocsDocument:
+    compact_snippets: list[OfficialDocsSnippet] = []
+    seen_texts: set[str] = set()
+
+    for snippet in document.snippets:
+        trimmed_text = _trim_langchain_snippet_text(snippet.text)
+        if trimmed_text in seen_texts:
+            continue
+        compact_snippets.append(
+            OfficialDocsSnippet(
+                text=trimmed_text,
+                rank=len(compact_snippets) + 1,
+            )
+        )
+        seen_texts.add(trimmed_text)
+        if len(compact_snippets) >= LANGCHAIN_MAX_SNIPPETS_PER_DOCUMENT:
+            break
+
+    return OfficialDocsDocument(
+        title=document.title,
+        url=document.url,
+        provider_mode="official_mcp",
+        snippets=compact_snippets,
+    )
+
+
+def _trim_langchain_snippet_text(text: str) -> str:
+    if len(text) <= LANGCHAIN_MAX_SNIPPET_LENGTH:
+        return text
+
+    truncated_text = text[: LANGCHAIN_MAX_SNIPPET_LENGTH - 3].rstrip()
+    if " " in truncated_text:
+        truncated_text = truncated_text.rsplit(" ", 1)[0]
+    return f"{truncated_text}..."
+
+
+def _canonicalize_langchain_url(url: str) -> str:
+    return url.split("#", 1)[0].rstrip("/").lower()
+
+
+def _tokenize_langchain_query(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", text.lower())
+        if len(token) > 2 and token not in LANGCHAIN_QUERY_STOPWORDS
+    }
 
 
 def _build_langchain_documents_from_structured_content(

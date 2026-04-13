@@ -240,6 +240,220 @@ def test_lookup_langchain_official_docs_prefers_search_tool_when_multiple_tools_
     assert result.documents[0].title == "Build a RAG agent with LangChain"
 
 
+def test_lookup_langchain_official_docs_keeps_only_top_relevant_documents() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do I build a RAG agent?",
+        library="langchain",
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_docs_by_lang_chain"}]}
+        return {
+            "structuredContent": {
+                "documents": [
+                    {
+                        "title": "Build a RAG agent with LangChain",
+                        "url": "https://docs.langchain.com/guides/rag",
+                        "content": "Use retrieval and prompt grounding to build a RAG agent.",
+                    },
+                    {
+                        "title": "RAG concepts",
+                        "url": "https://docs.langchain.com/concepts/rag",
+                        "content": "RAG combines retrieval with generation.",
+                    },
+                    {
+                        "title": "Tool calling",
+                        "url": "https://docs.langchain.com/how_to/tool_calling",
+                        "content": "Bind structured tools to a chat model.",
+                    },
+                    {
+                        "title": "Output parsers",
+                        "url": "https://docs.langchain.com/how_to/output_parsers",
+                        "content": "Parse model responses into structured values.",
+                    },
+                ]
+            }
+        }
+
+    result = lookup_langchain_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert [document.title for document in result.documents] == [
+        "Build a RAG agent with LangChain",
+        "RAG concepts",
+    ]
+
+
+def test_lookup_langchain_official_docs_dedupes_by_canonical_url() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do I build a RAG agent?",
+        library="langchain",
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_docs_by_lang_chain"}]}
+        return {
+            "structuredContent": {
+                "documents": [
+                    {
+                        "title": "Build a RAG agent with LangChain",
+                        "url": "https://docs.langchain.com/guides/rag#overview",
+                        "content": "Use retrieval and prompt grounding to build a RAG agent.",
+                    },
+                    {
+                        "title": "Build a RAG agent with LangChain",
+                        "url": "https://docs.langchain.com/guides/rag/",
+                        "content": "Start with a simple retrieval pipeline.",
+                    },
+                ]
+            }
+        }
+
+    result = lookup_langchain_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert len(result.documents) == 1
+    assert result.documents[0].url == "https://docs.langchain.com/guides/rag#overview"
+    assert [snippet.text for snippet in result.documents[0].snippets] == [
+        "Use retrieval and prompt grounding to build a RAG agent.",
+        "Start with a simple retrieval pipeline.",
+    ]
+
+
+def test_lookup_langchain_official_docs_drops_zero_overlap_docs_when_stronger_matches_exist(
+) -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do I build a RAG agent?",
+        library="langchain",
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_docs_by_lang_chain"}]}
+        return {
+            "structuredContent": {
+                "documents": [
+                    {
+                        "title": "Build a RAG agent with LangChain",
+                        "url": "https://docs.langchain.com/guides/rag",
+                        "content": "Use retrieval and prompt grounding to build a RAG agent.",
+                    },
+                    {
+                        "title": "Callbacks",
+                        "url": "https://docs.langchain.com/how_to/callbacks",
+                        "content": "Callbacks let you observe chain execution.",
+                    },
+                ]
+            }
+        }
+
+    result = lookup_langchain_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert [document.title for document in result.documents] == [
+        "Build a RAG agent with LangChain"
+    ]
+
+
+def test_lookup_langchain_official_docs_preserves_small_fallback_set_when_all_docs_are_weak(
+) -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do I optimize latency?",
+        library="langchain",
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_docs_by_lang_chain"}]}
+        return {
+            "structuredContent": {
+                "documents": [
+                    {
+                        "title": "Callbacks",
+                        "url": "https://docs.langchain.com/how_to/callbacks",
+                        "content": "Callbacks let you observe chain execution.",
+                    },
+                    {
+                        "title": "Output parsers",
+                        "url": "https://docs.langchain.com/how_to/output_parsers",
+                        "content": "Parse model responses into structured values.",
+                    },
+                    {
+                        "title": "Prompt templates",
+                        "url": "https://docs.langchain.com/how_to/prompt_templates",
+                        "content": "Prompt templates build messages from variables.",
+                    },
+                    {
+                        "title": "Chat history",
+                        "url": "https://docs.langchain.com/how_to/chat_history",
+                        "content": "Persist message history across turns.",
+                    },
+                ]
+            }
+        }
+
+    result = lookup_langchain_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert [document.title for document in result.documents] == [
+        "Callbacks",
+        "Output parsers",
+        "Prompt templates",
+    ]
+
+
+def test_lookup_langchain_official_docs_trims_long_snippets_and_limits_snippet_count() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do I build a RAG agent?",
+        library="langchain",
+    )
+    long_snippet = (
+        "Use retrieval and prompt grounding to build a RAG agent that can search "
+        "external context, assemble a focused prompt, and answer from the retrieved "
+        "documents while keeping the implementation reviewable and compact. " * 4
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_docs_by_lang_chain"}]}
+        return {
+            "structuredContent": {
+                "documents": [
+                    {
+                        "title": "Build a RAG agent with LangChain",
+                        "url": "https://docs.langchain.com/guides/rag",
+                        "snippets": [
+                            {"text": long_snippet},
+                            {"text": "Start with a simple retrieval pipeline."},
+                            {"text": "This third snippet should be dropped by the adapter."},
+                        ],
+                    }
+                ]
+            }
+        }
+
+    result = lookup_langchain_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert len(result.documents) == 1
+    assert len(result.documents[0].snippets) == 2
+    assert len(result.documents[0].snippets[0].text) <= 240
+    assert result.documents[0].snippets[0].text.endswith("...")
+    assert result.documents[0].snippets[1].text == "Start with a simple retrieval pipeline."
+
+
 def test_lookup_openai_official_docs_returns_normalized_documents() -> None:
     request = OfficialDocsLookupRequest(
         query="How do streaming responses work?",
