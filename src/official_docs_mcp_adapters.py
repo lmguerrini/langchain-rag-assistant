@@ -21,6 +21,26 @@ LANGCHAIN_OFFICIAL_MCP_TOOL_NAME = "search_docs_by_lang_chain"
 OPENAI_OFFICIAL_MCP_TOOL_NAME = "search_openai_docs"
 OPENAI_ALLOWED_TOOL_NAMES = (OPENAI_OFFICIAL_MCP_TOOL_NAME,)
 REMOTE_MCP_UNAVAILABLE_MESSAGE = "Remote MCP not available"
+OPENAI_MAX_DOCUMENTS = 3
+OPENAI_MAX_SNIPPETS_PER_DOCUMENT = 2
+OPENAI_MAX_SNIPPET_LENGTH = 240
+OPENAI_QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "according",
+    "are",
+    "documentation",
+    "docs",
+    "for",
+    "from",
+    "how",
+    "official",
+    "the",
+    "to",
+    "what",
+    "with",
+}
 
 
 class MCPRequestFn(Protocol):
@@ -164,6 +184,7 @@ def lookup_openai_official_docs(
     )
 
     documents = _build_openai_documents(tool_call_result)
+    documents = _shape_openai_documents(documents, query=request.query)
     if not documents:
         raise ValueError("OpenAI official docs MCP returned no usable documents.")
 
@@ -211,6 +232,138 @@ def _build_openai_documents(result_payload: Mapping[str, object]) -> list[Offici
             return documents
 
     raise ValueError("OpenAI official docs MCP returned an unsupported response shape.")
+
+
+def _shape_openai_documents(
+    documents: list[OfficialDocsDocument],
+    *,
+    query: str,
+) -> list[OfficialDocsDocument]:
+    deduped_documents = _dedupe_openai_documents(documents)
+    query_tokens = _tokenize_openai_query(query)
+
+    scored_documents: list[tuple[int, int, OfficialDocsDocument]] = []
+    for index, document in enumerate(deduped_documents):
+        score = _score_openai_document(document, query_tokens=query_tokens)
+        scored_documents.append((score, index, document))
+
+    if any(score > 0 for score, _, _ in scored_documents):
+        selected_documents = [
+            document
+            for score, _, document in sorted(
+                (item for item in scored_documents if item[0] > 0),
+                key=lambda item: (-item[0], item[1]),
+            )[:OPENAI_MAX_DOCUMENTS]
+        ]
+    else:
+        selected_documents = [
+            document
+            for _, _, document in scored_documents[:OPENAI_MAX_DOCUMENTS]
+        ]
+
+    return [_compact_openai_document(document) for document in selected_documents]
+
+
+def _dedupe_openai_documents(documents: list[OfficialDocsDocument]) -> list[OfficialDocsDocument]:
+    merged_documents: dict[str, OfficialDocsDocument] = {}
+    ordered_urls: list[str] = []
+
+    for document in documents:
+        canonical_url = _canonicalize_openai_url(document.url)
+        existing_document = merged_documents.get(canonical_url)
+        if existing_document is None:
+            merged_documents[canonical_url] = document
+            ordered_urls.append(canonical_url)
+            continue
+
+        merged_documents[canonical_url] = OfficialDocsDocument(
+            title=existing_document.title,
+            url=existing_document.url,
+            provider_mode=existing_document.provider_mode,
+            snippets=_merge_openai_snippets(
+                existing_document.snippets,
+                document.snippets,
+            ),
+        )
+
+    return [merged_documents[url] for url in ordered_urls]
+
+
+def _merge_openai_snippets(
+    left_snippets: list[OfficialDocsSnippet],
+    right_snippets: list[OfficialDocsSnippet],
+) -> list[OfficialDocsSnippet]:
+    merged_snippets: list[OfficialDocsSnippet] = []
+    seen_texts: set[str] = set()
+
+    for snippet in [*left_snippets, *right_snippets]:
+        if snippet.text in seen_texts:
+            continue
+        merged_snippets.append(
+            OfficialDocsSnippet(
+                text=snippet.text,
+                rank=len(merged_snippets) + 1,
+            )
+        )
+        seen_texts.add(snippet.text)
+
+    return merged_snippets
+
+
+def _score_openai_document(
+    document: OfficialDocsDocument,
+    *,
+    query_tokens: set[str],
+) -> int:
+    if not query_tokens:
+        return 0
+
+    title_overlap = query_tokens & _tokenize_openai_query(document.title)
+    url_overlap = query_tokens & _tokenize_openai_query(document.url)
+    snippet_overlap = query_tokens & _tokenize_openai_query(
+        " ".join(snippet.text for snippet in document.snippets)
+    )
+    return (len(title_overlap) * 3) + (len(url_overlap) * 2) + len(snippet_overlap)
+
+
+def _compact_openai_document(document: OfficialDocsDocument) -> OfficialDocsDocument:
+    compact_snippets: list[OfficialDocsSnippet] = []
+    seen_texts: set[str] = set()
+
+    for snippet in document.snippets:
+        trimmed_text = _trim_openai_snippet_text(snippet.text)
+        if trimmed_text in seen_texts:
+            continue
+        compact_snippets.append(
+            OfficialDocsSnippet(
+                text=trimmed_text,
+                rank=len(compact_snippets) + 1,
+            )
+        )
+        seen_texts.add(trimmed_text)
+        if len(compact_snippets) >= OPENAI_MAX_SNIPPETS_PER_DOCUMENT:
+            break
+
+    return OfficialDocsDocument(
+        title=document.title,
+        url=document.url,
+        provider_mode="official_mcp",
+        snippets=compact_snippets,
+    )
+
+
+def _trim_openai_snippet_text(text: str) -> str:
+    if len(text) <= OPENAI_MAX_SNIPPET_LENGTH:
+        return text
+
+    truncated_text = text[: OPENAI_MAX_SNIPPET_LENGTH - 3].rstrip()
+    if " " in truncated_text:
+        truncated_text = truncated_text.rsplit(" ", 1)[0]
+    return f"{truncated_text}..."
+
+
+def _canonicalize_openai_url(url: str) -> str:
+    return url.split("#", 1)[0].rstrip("/").lower()
 
 
 def _build_openai_documents_from_search_payload(
@@ -359,3 +512,11 @@ def _clean_openai_text(value: object) -> str | None:
     if not cleaned:
         return None
     return cleaned
+
+
+def _tokenize_openai_query(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", text.lower())
+        if len(token) > 2 and token not in OPENAI_QUERY_STOPWORDS
+    }

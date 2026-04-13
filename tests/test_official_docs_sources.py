@@ -260,6 +260,233 @@ def test_lookup_openai_official_docs_prefers_search_tool_when_multiple_tools_are
     assert result.documents[0].title == "Streaming responses"
 
 
+def test_lookup_openai_official_docs_keeps_only_top_relevant_documents() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do streaming responses work?",
+        library="openai",
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_openai_docs"}]}
+        return {
+            "structuredContent": {
+                "hits": [
+                    {
+                        "url_without_anchor": (
+                            "https://developers.openai.com/docs/guides/streaming-responses"
+                        ),
+                        "content": "Use streaming responses to receive partial output events.",
+                        "hierarchy": {"lvl1": "Streaming responses"},
+                    },
+                    {
+                        "url_without_anchor": (
+                            "https://developers.openai.com/docs/api-reference/responses"
+                        ),
+                        "content": "The Responses API supports streaming output.",
+                        "hierarchy": {"lvl1": "Responses API"},
+                    },
+                    {
+                        "url_without_anchor": (
+                            "https://developers.openai.com/docs/guides/batch"
+                        ),
+                        "content": "Batch processing lets you submit many requests offline.",
+                        "hierarchy": {"lvl1": "Batch API"},
+                    },
+                    {
+                        "url_without_anchor": (
+                            "https://developers.openai.com/docs/guides/realtime"
+                        ),
+                        "content": "Realtime sessions support low-latency audio interactions.",
+                        "hierarchy": {"lvl1": "Realtime API"},
+                    },
+                ]
+            }
+        }
+
+    result = lookup_openai_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert [document.title for document in result.documents] == [
+        "Streaming responses",
+        "Responses API",
+    ]
+
+
+def test_lookup_openai_official_docs_dedupes_by_canonical_url() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do streaming responses work?",
+        library="openai",
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_openai_docs"}]}
+        return {
+            "structuredContent": {
+                "hits": [
+                    {
+                        "url_without_anchor": (
+                            "https://developers.openai.com/docs/guides/streaming-responses"
+                        ),
+                        "content": "Use streaming responses to receive partial output events.",
+                        "hierarchy": {"lvl1": "Streaming responses"},
+                    },
+                    {
+                        "url_without_anchor": (
+                            "https://developers.openai.com/docs/guides/streaming-responses"
+                        ),
+                        "content": "Streaming responses emit events as tokens are generated.",
+                        "hierarchy": {"lvl1": "Streaming responses"},
+                    },
+                ]
+            }
+        }
+
+    result = lookup_openai_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert len(result.documents) == 1
+    assert result.documents[0].url == (
+        "https://developers.openai.com/docs/guides/streaming-responses"
+    )
+    assert len(result.documents[0].snippets) == 2
+
+
+def test_lookup_openai_official_docs_drops_zero_overlap_docs_when_stronger_matches_exist() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do streaming responses work?",
+        library="openai",
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_openai_docs"}]}
+        return {
+            "structuredContent": {
+                "hits": [
+                    {
+                        "url_without_anchor": (
+                            "https://developers.openai.com/docs/guides/streaming-responses"
+                        ),
+                        "content": "Use streaming responses to receive partial output events.",
+                        "hierarchy": {"lvl1": "Streaming responses"},
+                    },
+                    {
+                        "url_without_anchor": (
+                            "https://developers.openai.com/docs/guides/images"
+                        ),
+                        "content": "Generate or edit images with the Images API.",
+                        "hierarchy": {"lvl1": "Images"},
+                    },
+                ]
+            }
+        }
+
+    result = lookup_openai_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert [document.title for document in result.documents] == ["Streaming responses"]
+
+
+def test_lookup_openai_official_docs_preserves_small_fallback_set_when_all_docs_are_weak() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do I optimize latency?",
+        library="openai",
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_openai_docs"}]}
+        return {
+            "structuredContent": {
+                "hits": [
+                    {
+                        "url_without_anchor": "https://developers.openai.com/docs/guides/batch",
+                        "content": "Batch processing lets you submit many requests offline.",
+                        "hierarchy": {"lvl1": "Batch API"},
+                    },
+                    {
+                        "url_without_anchor": "https://developers.openai.com/docs/guides/images",
+                        "content": "Generate images with the Images API.",
+                        "hierarchy": {"lvl1": "Images"},
+                    },
+                    {
+                        "url_without_anchor": "https://developers.openai.com/docs/guides/realtime",
+                        "content": "Realtime sessions support audio interactions.",
+                        "hierarchy": {"lvl1": "Realtime API"},
+                    },
+                    {
+                        "url_without_anchor": "https://developers.openai.com/docs/guides/tools",
+                        "content": "Tools let models call external functions.",
+                        "hierarchy": {"lvl1": "Tool calling"},
+                    },
+                ]
+            }
+        }
+
+    result = lookup_openai_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert [document.title for document in result.documents] == [
+        "Batch API",
+        "Images",
+        "Realtime API",
+    ]
+
+
+def test_lookup_openai_official_docs_trims_long_snippets_and_limits_snippet_count() -> None:
+    request = OfficialDocsLookupRequest(
+        query="How do streaming responses work?",
+        library="openai",
+    )
+    long_snippet = (
+        "Streaming responses emit partial output events while a response is being generated "
+        "so applications can render text progressively and react before the final response "
+        "has completed. " * 4
+    )
+
+    def mcp_call_fn(*, server_url, method, params, timeout_seconds):
+        if method == "tools/list":
+            return {"tools": [{"name": "search_openai_docs"}]}
+        return {
+            "structuredContent": {
+                "documents": [
+                    {
+                        "title": "Streaming responses",
+                        "url": "https://developers.openai.com/docs/guides/streaming-responses",
+                        "snippets": [
+                            {"text": long_snippet},
+                            {"text": "Streaming events can be consumed incrementally."},
+                            {"text": "This third snippet should be dropped by the adapter."},
+                        ],
+                    }
+                ]
+            }
+        }
+
+    result = lookup_openai_official_docs(
+        request=request,
+        mcp_call_fn=mcp_call_fn,
+    )
+
+    assert len(result.documents) == 1
+    assert len(result.documents[0].snippets) == 2
+    assert len(result.documents[0].snippets[0].text) <= 240
+    assert result.documents[0].snippets[0].text.endswith("...")
+    assert result.documents[0].snippets[1].text == (
+        "Streaming events can be consumed incrementally."
+    )
+
+
 def test_lookup_streamlit_official_docs_uses_deterministic_fallback_manifest(tmp_path) -> None:
     manifest_path = tmp_path / "source_manifest.json"
     manifest_path.write_text(
