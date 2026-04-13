@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,10 +65,17 @@ class InternalDocRecord:
 
 
 def handle_mcp_jsonrpc_request(
-    payload: Mapping[str, object],
+    payload: object,
     *,
     docs_dir: Path = DEFAULT_DOCS_DIR,
 ) -> dict[str, object]:
+    if not isinstance(payload, Mapping):
+        return _build_error_response(
+            None,
+            code=-32600,
+            message="Invalid MCP request payload.",
+        )
+
     request_id = payload.get("id")
     method = payload.get("method")
 
@@ -332,3 +341,20 @@ def _build_error_response(
         "id": request_id,
         "error": error_payload,
     }
+
+
+def main() -> int:
+    raw_payload = sys.stdin.read()
+    try:
+        decoded_payload: object = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        decoded_payload = None
+
+    response = handle_mcp_jsonrpc_request(decoded_payload)
+    sys.stdout.write(json.dumps(response))
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

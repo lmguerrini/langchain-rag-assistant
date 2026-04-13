@@ -138,6 +138,19 @@ def test_project_tools_mcp_server_invalid_method() -> None:
     assert response["error"]["message"] == "Unsupported MCP method: resources/list"
 
 
+def test_project_tools_mcp_server_rejects_malformed_top_level_non_object_payload() -> None:
+    response = handle_mcp_jsonrpc_request(["not", "an", "object"])
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {
+            "code": -32600,
+            "message": "Invalid MCP request payload.",
+        },
+    }
+
+
 def test_project_tools_mcp_server_empty_search_result_behavior(tmp_path: Path) -> None:
     docs_dir = tmp_path / "raw"
     docs_dir.mkdir()
