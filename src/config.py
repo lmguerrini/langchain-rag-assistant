@@ -30,6 +30,22 @@ class Settings(BaseSettings):
         alias="CHROMA_COLLECTION_NAME",
     )
     raw_data_dir: Path = Field(default=Path("data/raw"), alias="RAW_DATA_DIR")
+    official_langchain_docs_mcp_url: str = Field(
+        default="https://docs.langchain.com/mcp",
+        alias="OFFICIAL_LANGCHAIN_DOCS_MCP_URL",
+    )
+    official_openai_docs_mcp_url: str = Field(
+        default="https://developers.openai.com/mcp",
+        alias="OFFICIAL_OPENAI_DOCS_MCP_URL",
+    )
+    official_docs_timeout_seconds: float = Field(
+        default=15.0,
+        alias="OFFICIAL_DOCS_TIMEOUT_SECONDS",
+    )
+    official_docs_fallback_manifest_path: Path = Field(
+        default=Path("data/official_docs/source_manifest.json"),
+        alias="OFFICIAL_DOCS_FALLBACK_MANIFEST_PATH",
+    )
     chunk_size: int = Field(default=800, alias="CHUNK_SIZE")
     chunk_overlap: int = Field(default=120, alias="CHUNK_OVERLAP")
     max_query_length: int = Field(default=500, alias="MAX_QUERY_LENGTH")

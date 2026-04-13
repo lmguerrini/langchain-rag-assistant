@@ -1,0 +1,44 @@
+{
+  "entries": [
+    {
+      "library": "streamlit",
+      "title": "st.chat_message",
+      "url": "https://docs.streamlit.io/develop/api-reference/chat/st.chat_message",
+      "snippets": [
+        "st.chat_message inserts a chat message container for a user or assistant turn.",
+        "Use chat message containers to build conversational layouts in Streamlit apps."
+      ],
+      "keywords": ["streamlit", "chat", "message", "assistant", "user", "ui"]
+    },
+    {
+      "library": "streamlit",
+      "title": "st.session_state",
+      "url": "https://docs.streamlit.io/develop/api-reference/caching-and-state/st.session_state",
+      "snippets": [
+        "st.session_state stores values across reruns for a single Streamlit session.",
+        "Use session state to preserve chat history and other per-session variables."
+      ],
+      "keywords": ["streamlit", "session", "state", "reruns", "history", "chat"]
+    },
+    {
+      "library": "chroma",
+      "title": "Persistent Client",
+      "url": "https://docs.trychroma.com/docs/run-chroma/persistent-client",
+      "snippets": [
+        "Use a persistent Chroma client when collections should survive process restarts.",
+        "A persistent client stores collections on disk instead of keeping them only in memory."
+      ],
+      "keywords": ["chroma", "persistent", "client", "disk", "storage", "restarts"]
+    },
+    {
+      "library": "chroma",
+      "title": "Metadata Filtering",
+      "url": "https://docs.trychroma.com/docs/querying-collections/metadata-filtering",
+      "snippets": [
+        "Metadata filtering narrows retrieval to documents whose metadata matches the filter.",
+        "Use metadata filters when you need targeted retrieval by tags or attributes."
+      ],
+      "keywords": ["chroma", "metadata", "filters", "filtering", "retrieval", "attributes"]
+    }
+  ]
+}
