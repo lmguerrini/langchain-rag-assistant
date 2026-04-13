@@ -72,6 +72,23 @@ def answer_official_docs_query(
 def _is_mcp_unavailable_error(exc: Exception) -> bool:
     if isinstance(exc, NotImplementedError):
         return True
-    if isinstance(exc, RuntimeError) and "Remote MCP not available" in str(exc):
-        return True
+    if isinstance(exc, RuntimeError):
+        message = str(exc).lower()
+        if "remote mcp not available" in message:
+            return True
+        if "official docs mcp request failed:" in message:
+            return True
+        transport_markers = (
+            "certificate verify failed",
+            "ssl",
+            "tls",
+            "timeout",
+            "timed out",
+            "connection",
+            "urlopen error",
+            "network is unreachable",
+            "name resolution",
+        )
+        if any(marker in message for marker in transport_markers):
+            return True
     return False
