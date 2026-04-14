@@ -71,6 +71,77 @@ ERROR_FAMILY_KEYWORDS = {
     "persistence": {"persist", "persistence", "database", "stored", "rebuild"},
 }
 
+DOMAIN_QUERY_KEYWORDS = {
+    "analytics",
+    "api",
+    "api key",
+    "chat",
+    "chat input",
+    "chroma",
+    "chunk",
+    "chunking",
+    "chunks",
+    "cost",
+    "csv",
+    "diagnose",
+    "diagnostics",
+    "docs",
+    "documentation",
+    "embedding",
+    "embeddings",
+    "error",
+    "errors",
+    "evaluation",
+    "export",
+    "exports",
+    "filter",
+    "filters",
+    "grounded",
+    "grounding",
+    "index",
+    "indexing",
+    "json",
+    "knowledge base",
+    "langchain",
+    "mcp",
+    "metadata",
+    "model",
+    "models",
+    "official docs",
+    "openai",
+    "pdf",
+    "persist",
+    "persistence",
+    "prompt",
+    "prompting",
+    "rag",
+    "rate limit",
+    "rebuild",
+    "rerun",
+    "retrieval",
+    "session",
+    "session state",
+    "sidebar",
+    "source",
+    "sources",
+    "streamlit",
+    "token",
+    "tokens",
+    "tool",
+    "tools",
+    "ui",
+    "usage",
+    "vector",
+    "vector store",
+    "vectorstore",
+}
+DOMAIN_QUERY_TOKENS = {
+    keyword for keyword in DOMAIN_QUERY_KEYWORDS if " " not in keyword
+}
+DOMAIN_QUERY_PHRASES = {
+    keyword for keyword in DOMAIN_QUERY_KEYWORDS if " " in keyword
+}
+
 
 class RetrievalError(ValueError):
     pass
@@ -82,6 +153,15 @@ def retrieve_chunks(
     request: RetrievalRequest,
 ) -> RetrievalResult:
     _validate_vector_store(vector_store)
+    if _is_clearly_out_of_domain(request.query):
+        return RetrievalResult(
+            rewritten_query=rewrite_query(request.query),
+            applied_filters=RetrievalFilters(),
+            used_fallback=False,
+            chunks=[],
+            sources=[],
+        )
+
     rewritten_query = rewrite_query(request.query)
     filters = infer_metadata_filters(request.query)
 
@@ -232,3 +312,15 @@ def _infer_single_match(
     if len(matched_values) == 1:
         return matched_values[0]
     return None
+
+
+def _is_clearly_out_of_domain(query: str) -> bool:
+    normalized = _normalize_query(query)
+    if not normalized:
+        return False
+
+    query_tokens = set(normalized.split())
+    return not (
+        any(phrase in normalized for phrase in DOMAIN_QUERY_PHRASES)
+        or any(token in query_tokens for token in DOMAIN_QUERY_TOKENS)
+    )

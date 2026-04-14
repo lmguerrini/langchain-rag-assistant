@@ -163,9 +163,22 @@ def render_latest_turn() -> None:
             st.write(turn["answer"])
             with st.expander("How This Answer Was Generated"):
                 st.write(get_response_generation_explanation(turn))
-            if turn["tool_result"]:
+            tool_display = build_tool_result_display_data(turn.get("tool_result"))
+            if tool_display is not None:
                 with st.expander("Tool Result"):
-                    st.json(turn["tool_result"])
+                    st.markdown(f"**Tool:** {tool_display['tool_name']}")
+                    if tool_display["raw_query"] is not None:
+                        st.caption(f"Original query: {tool_display['raw_query']}")
+                    if tool_display["input_fields"]:
+                        st.markdown("**Input**")
+                        render_tool_result_fields(tool_display["input_fields"])
+                    if tool_display["output_fields"]:
+                        st.markdown("**Result**")
+                        render_tool_result_fields(tool_display["output_fields"])
+                    if tool_display["error"] is not None:
+                        st.error(tool_display["error"])
+                    with st.expander("Raw tool payload"):
+                        st.json(turn["tool_result"])
             official_docs_display = build_official_docs_display_data(
                 turn.get("official_docs_result")
             )
@@ -380,6 +393,124 @@ def build_official_docs_display_data(
     }
 
 
+def build_tool_result_display_data(tool_result: object) -> dict[str, object] | None:
+    if not isinstance(tool_result, dict):
+        return None
+
+    return {
+        "tool_name": format_tool_name_label(tool_result.get("tool_name")) or "Tool",
+        "raw_query": _clean_display_text(tool_result.get("raw_query")),
+        "input_fields": build_tool_field_display_rows(tool_result.get("tool_input")),
+        "output_fields": build_tool_field_display_rows(tool_result.get("tool_output")),
+        "error": _clean_display_text(tool_result.get("tool_error")),
+    }
+
+
+def build_tool_field_display_rows(data: object) -> list[dict[str, object]]:
+    if not isinstance(data, dict):
+        return []
+
+    rows: list[dict[str, object]] = []
+    for key, value in data.items():
+        lines = _format_tool_field_lines(key, value)
+        if not lines:
+            continue
+        rows.append(
+            {
+                "label": format_tool_field_label(key),
+                "lines": lines,
+            }
+        )
+    return rows
+
+
+def format_tool_name_label(value: object) -> str | None:
+    labels = {
+        "estimate_openai_cost": "Estimate OpenAI Cost",
+        "diagnose_stack_error": "Diagnose Stack Error",
+        "recommend_retrieval_config": "Recommend Retrieval Config",
+    }
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower()
+    if not cleaned:
+        return None
+    return labels.get(cleaned, cleaned.replace("_", " ").title())
+
+
+def format_tool_field_label(key: str) -> str:
+    labels = {
+        "model": "Model",
+        "input_tokens": "Input tokens",
+        "output_tokens": "Output tokens",
+        "num_calls": "Number of calls",
+        "estimated_input_cost_usd": "Estimated input cost (USD)",
+        "estimated_output_cost_usd": "Estimated output cost (USD)",
+        "estimated_total_cost_usd": "Estimated total cost (USD)",
+        "library": "Library",
+        "error_message": "Error message",
+        "code_context_summary": "Code context summary",
+        "error_category": "Error category",
+        "likely_causes": "Likely causes",
+        "recommended_checks": "Recommended checks",
+        "content_type": "Content type",
+        "document_length": "Document length",
+        "task_type": "Task type",
+        "chunk_size": "Chunk size",
+        "chunk_overlap": "Chunk overlap",
+        "top_k": "Top K",
+        "use_metadata_filters": "Use metadata filters",
+        "rationale": "Rationale",
+    }
+    return labels.get(key, key.replace("_", " ").title())
+
+
+def render_tool_result_fields(fields: list[dict[str, object]]) -> None:
+    for field in fields:
+        label = field["label"]
+        lines = field["lines"]
+        if len(lines) == 1:
+            st.write(f"- {label}: {lines[0]}")
+            continue
+
+        st.write(f"**{label}**")
+        for line in lines:
+            st.write(f"- {line}")
+
+
+def _format_tool_field_lines(key: str, value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [
+            line
+            for item in value
+            if (line := _format_tool_scalar_value(key, item)) is not None
+        ]
+
+    formatted_value = _format_tool_scalar_value(key, value)
+    if formatted_value is None:
+        return []
+    return [formatted_value]
+
+
+def _format_tool_scalar_value(key: str, value: object) -> str | None:
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if "cost" in key:
+            return f"${value:.6f}"
+        return f"{value:g}"
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, dict | list):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def parse_source_string(source: str) -> dict[str, object] | None:
     segments = [segment.strip() for segment in source.split("|")]
     if not segments or not segments[0]:
@@ -524,8 +655,9 @@ def _format_source_metadata_fragment(key: str, value: str) -> str:
 def get_help_content() -> dict[str, list[str] | str]:
     return {
         "helps_with": (
-            "LangChain-based RAG application design, Chroma retrieval decisions, "
-            "Streamlit integration patterns, and the built-in domain tools."
+            "LangChain-based RAG application design, local knowledge-base guidance, "
+            "official docs answers, Streamlit/Chroma implementation patterns, and "
+            "built-in support tools."
         ),
         "out_of_scope": (
             "General programming help, unrelated topics, and broad questions outside "
@@ -533,11 +665,17 @@ def get_help_content() -> dict[str, list[str] | str]:
         ),
         "example_questions": [
             "How should I persist and rebuild the Chroma index locally?",
-            "How should I display retrieved sources in a Streamlit chat interface?",
+            "According to the LangChain docs, how should I start a small RAG application?",
             "Estimate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, 500 output tokens, and 3 calls",
-            "Alternative format: model=gpt-4.1-mini, input_tokens=1000, output_tokens=500, num_calls=3",
+            "Diagnose this Streamlit error: DuplicateWidgetID",
+            "Recommend retrieval config for long technical documentation used for debugging questions",
+            "What is the capital of France?",
         ],
-        "examples_intro": "You can ask natural questions or use structured inputs for tools.",
+        "review_actions": [
+            "Open the Analytics tab to inspect response breakdowns, token usage, model usage, KB status, and recent diagnostics.",
+            "Use Run evaluation snapshot in Analytics to show the current evaluation summary and per-case results.",
+        ],
+        "examples_intro": "Use these prompts to demonstrate the main response paths during review.",
         "response_types": [
             "Grounded answer: generated from retrieved knowledge-base context.",
             "Official docs answer: generated from official documentation evidence only.",
@@ -629,8 +767,7 @@ def build_conversation_markdown(conversation_history: list[dict[str, object]]) -
 
         if turn["tool_result"]:
             lines.append("**Tool result:**")
-            for key, value in turn["tool_result"].items():
-                lines.append(f"- {key}: {value}")
+            lines.extend(build_tool_result_markdown_lines(turn["tool_result"]))
             lines.append("")
 
     return "\n".join(lines).strip() + "\n"
@@ -789,7 +926,7 @@ def build_conversation_pdf(conversation_history: list[dict[str, object]]) -> byt
                     pdf.multi_cell(0, 7, normalize_text_for_pdf(f"- {source}"))
 
             if turn["tool_result"]:
-                for line in build_pdf_detail_lines("Tool result", turn["tool_result"]):
+                for line in build_tool_result_text_lines(turn["tool_result"]):
                     pdf.set_x(pdf.l_margin)
                     pdf.multi_cell(0, 7, normalize_text_for_pdf(line))
 
@@ -843,6 +980,72 @@ def build_pdf_detail_lines(title: str, data: dict[str, object]) -> list[str]:
             else:
                 value_text = str(value)
         lines.append(f"- {label}: {value_text}")
+    return lines
+
+
+def build_tool_result_markdown_lines(tool_result: object) -> list[str]:
+    tool_display = build_tool_result_display_data(tool_result)
+    if tool_display is None:
+        return []
+
+    lines = [f"- Tool: {tool_display['tool_name']}"]
+    if tool_display["raw_query"] is not None:
+        lines.append(f"- Original query: {tool_display['raw_query']}")
+    if tool_display["input_fields"]:
+        lines.append("- Input:")
+        lines.extend(_build_markdown_tool_field_lines(tool_display["input_fields"]))
+    if tool_display["output_fields"]:
+        lines.append("- Result:")
+        lines.extend(_build_markdown_tool_field_lines(tool_display["output_fields"]))
+    if tool_display["error"] is not None:
+        lines.append(f"- Error: {tool_display['error']}")
+    return lines
+
+
+def _build_markdown_tool_field_lines(fields: list[dict[str, object]]) -> list[str]:
+    lines: list[str] = []
+    for field in fields:
+        label = field["label"]
+        field_lines = field["lines"]
+        if len(field_lines) == 1:
+            lines.append(f"  - {label}: {field_lines[0]}")
+            continue
+        lines.append(f"  - {label}:")
+        for item in field_lines:
+            lines.append(f"    - {item}")
+    return lines
+
+
+def build_tool_result_text_lines(tool_result: object) -> list[str]:
+    tool_display = build_tool_result_display_data(tool_result)
+    if tool_display is None:
+        return []
+
+    lines = [f"Tool result: {tool_display['tool_name']}"]
+    if tool_display["raw_query"] is not None:
+        lines.append(f"- Original query: {tool_display['raw_query']}")
+    if tool_display["input_fields"]:
+        lines.append("Input:")
+        lines.extend(_build_text_tool_field_lines(tool_display["input_fields"]))
+    if tool_display["output_fields"]:
+        lines.append("Result:")
+        lines.extend(_build_text_tool_field_lines(tool_display["output_fields"]))
+    if tool_display["error"] is not None:
+        lines.append(f"- Error: {tool_display['error']}")
+    return lines
+
+
+def _build_text_tool_field_lines(fields: list[dict[str, object]]) -> list[str]:
+    lines: list[str] = []
+    for field in fields:
+        label = field["label"]
+        field_lines = field["lines"]
+        if len(field_lines) == 1:
+            lines.append(f"- {label}: {field_lines[0]}")
+            continue
+        lines.append(f"{label}:")
+        for item in field_lines:
+            lines.append(f"- {item}")
     return lines
 
 
@@ -972,6 +1175,9 @@ def render_help_section(
             st.caption("Example questions")
             for question in help_content["example_questions"]:
                 st.write(f"- {question}")
+            st.caption("Review actions")
+            for item in help_content["review_actions"]:
+                st.write(f"- {item}")
             st.caption("How to read responses")
             for item in help_content["response_types"]:
                 st.write(f"- {item}")
@@ -1125,6 +1331,7 @@ def render_analytics_dashboard(
             st.error(f"Evaluation dataset unavailable: {evaluation_dataset_error}")
 
         if st.button("Run evaluation snapshot", key="run_evaluation_snapshot"):
+            st.session_state[ANALYTICS_EVAL_ERROR_KEY] = None
             with st.status("Running evaluation snapshot...", expanded=True) as status:
                 status.write(f"Loading evaluation cases from {settings.raw_data_dir.parent / 'eval' / 'eval_cases.json'}")
                 try:
@@ -1322,10 +1529,10 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    st.set_page_config(page_title="RAG Assistant", page_icon=":speech_balloon:")
-    st.title("RAG Assistant")
+    st.set_page_config(page_title="LangChain RAG Assistant", page_icon=":speech_balloon:")
+    st.title("LangChain RAG Assistant")
     st.write(
-        "Ask about LangChain-based RAG application development with Chroma and Streamlit."
+        "Ask about LangChain-based RAG application development with Chroma, Streamlit, official docs, and built-in support tools."
     )
 
     if "conversation_history" not in st.session_state:

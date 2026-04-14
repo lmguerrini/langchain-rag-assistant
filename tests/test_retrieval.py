@@ -53,7 +53,7 @@ def test_retrieve_chunks_falls_back_when_filtered_search_is_empty(indexed_vector
         vector_store=indexed_vector_store,
         request=RetrievalRequest(
             query="Show a Streamlit persistence debugging example",
-            top_k=2,
+            top_k=3,
         ),
     )
 
@@ -120,6 +120,7 @@ def test_retrieve_chunks_returns_no_usable_chunks_for_off_domain_query(indexed_v
 
     assert result.chunks == []
     assert result.sources == []
+    assert result.used_fallback is False
 
 
 @pytest.fixture
@@ -153,6 +154,21 @@ error_family: ui
 ---
 Streamlit chat interfaces should show source metadata next to the answer.
 Use session state carefully when debugging reruns in a retrieval app.
+""",
+        encoding="utf-8",
+    )
+    (raw_dir / "retrieval_debugging_playbook.md").write_text(
+        """---
+title: Retrieval Debugging Playbook
+topic: rag
+library: general
+doc_type: troubleshooting
+difficulty: advanced
+error_family: retrieval
+---
+Similarity search can still return weak context.
+That matters for out-of-domain questions like What is the capital of France?
+Those questions should still return no usable chunks and no grounded answer.
 """,
         encoding="utf-8",
     )

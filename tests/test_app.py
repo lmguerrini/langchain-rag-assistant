@@ -23,6 +23,9 @@ from app import (
     build_response_behavior_chart,
     build_response_behavior_chart_rows,
     build_session_usage_totals,
+    build_tool_result_display_data,
+    build_tool_result_markdown_lines,
+    build_tool_result_text_lines,
     build_turn_record,
     build_vector_store_cache_inputs,
     build_kb_rebuild_error_message,
@@ -212,6 +215,78 @@ def test_build_official_docs_display_data_handles_missing_or_empty_documents() -
     ) == {
         "library": "OpenAI",
         "documents": [],
+    }
+
+
+def test_build_tool_result_display_data_formats_structured_cost_tool_result() -> None:
+    display_data = build_tool_result_display_data(
+        {
+            "tool_name": "estimate_openai_cost",
+            "raw_query": (
+                "Estimate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, "
+                "500 output tokens, and 3 calls"
+            ),
+            "tool_input": {
+                "model": "gpt-4.1-mini",
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "num_calls": 3,
+            },
+            "tool_output": {
+                "model": "gpt-4.1-mini",
+                "estimated_input_cost_usd": 0.0012,
+                "estimated_output_cost_usd": 0.0008,
+                "estimated_total_cost_usd": 0.002,
+            },
+            "tool_error": None,
+        }
+    )
+
+    assert display_data == {
+        "tool_name": "Estimate OpenAI Cost",
+        "raw_query": (
+            "Estimate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, "
+            "500 output tokens, and 3 calls"
+        ),
+        "input_fields": [
+            {"label": "Model", "lines": ["gpt-4.1-mini"]},
+            {"label": "Input tokens", "lines": ["1000"]},
+            {"label": "Output tokens", "lines": ["500"]},
+            {"label": "Number of calls", "lines": ["3"]},
+        ],
+        "output_fields": [
+            {"label": "Model", "lines": ["gpt-4.1-mini"]},
+            {"label": "Estimated input cost (USD)", "lines": ["$0.001200"]},
+            {"label": "Estimated output cost (USD)", "lines": ["$0.000800"]},
+            {"label": "Estimated total cost (USD)", "lines": ["$0.002000"]},
+        ],
+        "error": None,
+    }
+
+
+def test_build_tool_result_display_data_formats_error_only_when_present() -> None:
+    display_data = build_tool_result_display_data(
+        {
+            "tool_name": "diagnose_stack_error",
+            "raw_query": "Diagnose this Streamlit error",
+            "tool_input": {
+                "library": "streamlit",
+                "error_message": "DuplicateWidgetID",
+            },
+            "tool_output": None,
+            "tool_error": "Tool validation failed.",
+        }
+    )
+
+    assert display_data == {
+        "tool_name": "Diagnose Stack Error",
+        "raw_query": "Diagnose this Streamlit error",
+        "input_fields": [
+            {"label": "Library", "lines": ["streamlit"]},
+            {"label": "Error message", "lines": ["DuplicateWidgetID"]},
+        ],
+        "output_fields": [],
+        "error": "Tool validation failed.",
     }
 
 
@@ -436,16 +511,23 @@ def test_get_response_generation_explanation_maps_turn_variants() -> None:
 def test_get_help_content_includes_practical_sections() -> None:
     content = get_help_content()
 
-    assert "LangChain-based RAG application design" in content["helps_with"]
+    assert "official docs answers" in content["helps_with"]
     assert "Out of scope" not in content["out_of_scope"]
     assert (
         content["examples_intro"]
-        == "You can ask natural questions or use structured inputs for tools."
+        == "Use these prompts to demonstrate the main response paths during review."
     )
-    assert content["example_questions"][-2:] == [
+    assert content["example_questions"] == [
+        "How should I persist and rebuild the Chroma index locally?",
+        "According to the LangChain docs, how should I start a small RAG application?",
         "Estimate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, 500 output tokens, and 3 calls",
-        "Alternative format: model=gpt-4.1-mini, input_tokens=1000, output_tokens=500, num_calls=3",
+        "Diagnose this Streamlit error: DuplicateWidgetID",
+        "Recommend retrieval config for long technical documentation used for debugging questions",
+        "What is the capital of France?",
     ]
+    assert len(content["review_actions"]) == 2
+    assert "Analytics tab" in content["review_actions"][0]
+    assert "Run evaluation snapshot" in content["review_actions"][1]
     assert any("Grounded answer" in item for item in content["response_types"])
     assert any("Official docs answer" in item for item in content["response_types"])
 
@@ -610,6 +692,16 @@ def test_build_conversation_markdown_formats_grounded_tool_and_fallback_turns() 
             "sources": [],
             "tool_result": {
                 "tool_name": "estimate_openai_cost",
+                "raw_query": "Estimate OpenAI cost",
+                "tool_input": {
+                    "model": "gpt-4.1-mini",
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                    "num_calls": 3,
+                },
+                "tool_output": {
+                    "estimated_total_cost_usd": 0.0024,
+                },
                 "tool_error": None,
             },
         },
@@ -629,8 +721,72 @@ def test_build_conversation_markdown_formats_grounded_tool_and_fallback_turns() 
     assert "**Response type:** Grounded answer" in markdown
     assert "- Chroma Persistence and Reindexing Guide" in markdown
     assert "**Response type:** Tool result" in markdown
-    assert "- tool_name: estimate_openai_cost" in markdown
+    assert "- Tool: Estimate OpenAI Cost" in markdown
+    assert "- Original query: Estimate OpenAI cost" in markdown
+    assert "  - Model: gpt-4.1-mini" in markdown
+    assert "  - Estimated total cost (USD): $0.002400" in markdown
     assert "**Response type:** No-context fallback" in markdown
+
+
+def test_build_tool_result_markdown_lines_matches_ui_style() -> None:
+    lines = build_tool_result_markdown_lines(
+        {
+            "tool_name": "diagnose_stack_error",
+            "raw_query": "Diagnose this Streamlit error: DuplicateWidgetID",
+            "tool_input": {
+                "library": "streamlit",
+                "error_message": "DuplicateWidgetID",
+            },
+            "tool_output": {
+                "error_category": "ui",
+                "likely_causes": [
+                    "Two widgets share the same generated key.",
+                ],
+            },
+            "tool_error": None,
+        }
+    )
+
+    assert lines == [
+        "- Tool: Diagnose Stack Error",
+        "- Original query: Diagnose this Streamlit error: DuplicateWidgetID",
+        "- Input:",
+        "  - Library: streamlit",
+        "  - Error message: DuplicateWidgetID",
+        "- Result:",
+        "  - Error category: ui",
+        "  - Likely causes: Two widgets share the same generated key.",
+    ]
+
+
+def test_build_tool_result_text_lines_matches_ui_style() -> None:
+    lines = build_tool_result_text_lines(
+        {
+            "tool_name": "recommend_retrieval_config",
+            "raw_query": "Recommend retrieval config for long technical documentation used for debugging questions",
+            "tool_input": {
+                "content_type": "how_to",
+                "document_length": "advanced",
+            },
+            "tool_output": {
+                "chunk_size": 1000,
+                "top_k": 5,
+            },
+            "tool_error": "Validation warning.",
+        }
+    )
+
+    assert lines == [
+        "Tool result: Recommend Retrieval Config",
+        "- Original query: Recommend retrieval config for long technical documentation used for debugging questions",
+        "Input:",
+        "- Content type: how_to",
+        "- Document length: advanced",
+        "Result:",
+        "- Chunk size: 1000",
+        "- Top K: 5",
+        "- Error: Validation warning.",
+    ]
 
 
 def test_build_conversation_snapshot_is_stable_for_equivalent_turns() -> None:
