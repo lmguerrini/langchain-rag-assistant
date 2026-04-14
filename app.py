@@ -6,24 +6,40 @@ import io
 import re
 import time
 
+import altair as alt
 import streamlit as st
+import streamlit.components.v1 as components
 from fpdf import FPDF
 from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from build_index import KBRebuildResult, rebuild_knowledge_base
+from src.analytics import (
+    build_evaluation_case_rows,
+    build_evaluation_summary_metrics,
+    build_grounded_source_summary,
+    build_model_usage_breakdown,
+    build_overview_metrics,
+    build_recent_diagnostics_rows,
+    build_response_type_breakdown,
+    build_usage_totals,
+)
 from src.chains import run_backend_query
 from src.config import Settings, get_settings
+from src.evaluation import load_eval_cases, run_runtime_evaluation
 from src.kb_status import KBStatusResult, get_kb_status
 from src.logger import configure_logging, get_logger
 from src.rate_limit import apply_rate_limit
 from src.schemas import AnswerResult
+from src.tools import maybe_invoke_tool
 
 
 PREVIEW_LENGTH = 80
 EXPORT_FORMAT_OPTIONS = ("Markdown", "JSON", "CSV", "PDF")
 KB_REBUILD_FEEDBACK_KEY = "kb_rebuild_feedback"
 CHAT_MODEL_SESSION_KEY = "selected_chat_model"
+ANALYTICS_EVAL_REPORT_KEY = "analytics_evaluation_report"
+ANALYTICS_EVAL_ERROR_KEY = "analytics_evaluation_error"
 PDF_TEXT_REPLACEMENTS = str.maketrans(
     {
         "\u00a0": " ",
@@ -150,9 +166,31 @@ def render_latest_turn() -> None:
             if turn["tool_result"]:
                 with st.expander("Tool Result"):
                     st.json(turn["tool_result"])
-            if turn.get("official_docs_result"):
+            official_docs_display = build_official_docs_display_data(
+                turn.get("official_docs_result")
+            )
+            if official_docs_display is not None:
                 with st.expander("Official Docs Result"):
-                    st.json(turn["official_docs_result"])
+                    if official_docs_display["library"] is not None:
+                        st.caption(f"Library: {official_docs_display['library']}")
+                    if not official_docs_display["documents"]:
+                        st.write(
+                            "No official documentation documents were returned for this request."
+                        )
+                    for index, document in enumerate(
+                        official_docs_display["documents"],
+                        start=1,
+                    ):
+                        st.markdown(f"**Document {index}: {document['title']}**")
+                        metadata_fragments = []
+                        if document["provider_label"] is not None:
+                            metadata_fragments.append(document["provider_label"])
+                        if metadata_fragments:
+                            st.caption(" | ".join(metadata_fragments))
+                        if document["url"] is not None:
+                            st.caption(document["url"])
+                        for snippet in document["snippets"]:
+                            st.write(f"- {snippet}")
             if turn["sources"]:
                 with st.expander("Sources"):
                     for source in turn["sources"]:
@@ -231,6 +269,10 @@ def build_turn_record(query: str, result: AnswerResult) -> dict[str, object]:
     }
 
 
+def should_skip_resource_loading(query: str) -> bool:
+    return maybe_invoke_tool(query) is not None
+
+
 def get_response_type_label(turn: dict[str, object]) -> str:
     if turn.get("tool_result"):
         return "Tool result"
@@ -297,6 +339,47 @@ def format_request_usage_label(turn: dict[str, object]) -> str:
     )
 
 
+def build_official_docs_display_data(
+    official_docs_result: object,
+) -> dict[str, object] | None:
+    if not isinstance(official_docs_result, dict):
+        return None
+
+    lookup_result = official_docs_result.get("lookup_result")
+    raw_documents = lookup_result.get("documents") if isinstance(lookup_result, dict) else []
+    documents: list[dict[str, object]] = []
+    if isinstance(raw_documents, list):
+        for raw_document in raw_documents:
+            if not isinstance(raw_document, dict):
+                continue
+
+            raw_snippets = raw_document.get("snippets")
+            snippets = []
+            if isinstance(raw_snippets, list):
+                for raw_snippet in raw_snippets:
+                    if not isinstance(raw_snippet, dict):
+                        continue
+                    snippet_text = str(raw_snippet.get("text", "")).strip()
+                    if snippet_text:
+                        snippets.append(snippet_text)
+
+            documents.append(
+                {
+                    "title": str(raw_document.get("title") or "Untitled document").strip(),
+                    "url": _clean_display_text(raw_document.get("url")),
+                    "provider_label": format_official_docs_provider_label(
+                        raw_document.get("provider_mode")
+                    ),
+                    "snippets": snippets,
+                }
+            )
+
+    return {
+        "library": format_official_docs_library_label(official_docs_result.get("library")),
+        "documents": documents,
+    }
+
+
 def parse_source_string(source: str) -> dict[str, object] | None:
     segments = [segment.strip() for segment in source.split("|")]
     if not segments or not segments[0]:
@@ -346,6 +429,41 @@ def format_source_display(source: str) -> dict[str, object]:
         "raw_source": source,
         "parse_failed": False,
     }
+
+
+def format_official_docs_library_label(value: object) -> str | None:
+    labels = {
+        "langchain": "LangChain",
+        "openai": "OpenAI",
+        "streamlit": "Streamlit",
+        "chroma": "Chroma",
+    }
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower()
+    if not cleaned:
+        return None
+    return labels.get(cleaned, cleaned.title())
+
+
+def format_official_docs_provider_label(value: object) -> str | None:
+    labels = {
+        "official_mcp": "Provider: Official MCP",
+        "official_fallback": "Provider: Local official-docs fallback",
+    }
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower()
+    if not cleaned:
+        return None
+    return labels.get(cleaned, f"Provider: {cleaned.replace('_', ' ')}")
+
+
+def _clean_display_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
 
 
 def build_session_usage_totals(
@@ -862,6 +980,344 @@ def render_help_section(
         st.caption(format_session_usage_label(conversation_history))
 
 
+def render_analytics_dashboard(
+    *,
+    settings: Settings,
+    conversation_history: list[dict[str, object]],
+    kb_status: KBStatusResult,
+    run_evaluation_fn=run_runtime_evaluation,
+    load_eval_cases_fn=load_eval_cases,
+) -> None:
+    overview = build_overview_metrics(conversation_history, kb_status)
+    response_breakdown = build_response_type_breakdown(conversation_history)
+    grounded_summary = build_grounded_source_summary(conversation_history)
+    usage_totals = build_usage_totals(conversation_history)
+    model_usage_rows = build_model_usage_breakdown(conversation_history)
+    recent_diagnostics_rows = build_recent_diagnostics_rows(
+        conversation_history,
+        limit=10,
+        preview_length=PREVIEW_LENGTH,
+    )
+
+    st.subheader("Analytics Dashboard")
+    st.caption(
+        "This dashboard uses current session history, KB status, tracked usage data, "
+        "and the optional evaluation snapshot."
+    )
+
+    st.markdown("**Overview**")
+    overview_columns = st.columns(5)
+    overview_columns[0].metric("Conversation turns", overview["total_conversation_turns"])
+    overview_columns[1].metric("LLM-backed requests", overview["llm_backed_request_count"])
+    overview_columns[2].metric("Total tokens", overview["total_tokens"])
+    overview_columns[3].metric(
+        "Estimated total cost",
+        _format_cost_metric(overview["estimated_total_cost_usd"]),
+    )
+    with overview_columns[4]:
+        st.caption("Knowledge base")
+        st.write(format_kb_status_label(kb_status).removeprefix("Status: "))
+        st.caption(kb_status.summary)
+    st.caption(kb_status.detail)
+
+    st.divider()
+    st.markdown("**Response Behavior**")
+    if any(row["count"] for row in response_breakdown):
+        st.altair_chart(
+            build_response_behavior_chart(response_breakdown),
+            use_container_width=True,
+        )
+        response_table_column, response_detail_column = st.columns((2, 1))
+        with response_table_column:
+            st.dataframe(
+                [
+                    {
+                        "Response type": row["response_type"],
+                        "Count": row["count"],
+                        "Share": f"{float(row['share']) * 100:.1f}%",
+                    }
+                    for row in response_breakdown
+                ],
+                hide_index=True,
+                use_container_width=True,
+            )
+        with response_detail_column:
+            st.metric("Grounded answers", grounded_summary["grounded_answer_count"])
+            st.metric(
+                "Grounded with sources",
+                grounded_summary["grounded_answers_with_sources"],
+            )
+            st.metric(
+                "Avg sources / grounded",
+                f"{grounded_summary['average_sources_per_grounded']:.2f}",
+            )
+            st.metric(
+                "Max sources / grounded",
+                grounded_summary["max_sources_per_grounded"],
+            )
+    else:
+        st.info("No response behavior data yet.")
+
+    st.divider()
+    st.markdown("**Token & Model Usage**")
+    token_columns = st.columns(4)
+    token_columns[0].metric("Tracked requests", usage_totals["request_count"])
+    token_columns[1].metric("Input tokens", usage_totals["input_tokens"])
+    token_columns[2].metric("Output tokens", usage_totals["output_tokens"])
+    token_columns[3].metric("Total tokens", usage_totals["total_tokens"])
+    if model_usage_rows:
+        st.altair_chart(
+            build_model_usage_chart(model_usage_rows),
+            use_container_width=True,
+        )
+        st.dataframe(
+            [
+                {
+                    "Model": row["model"],
+                    "Requests": row["request_count"],
+                    "Input tokens": row["input_tokens"],
+                    "Output tokens": row["output_tokens"],
+                    "Total tokens": row["total_tokens"],
+                    "Estimated cost": _format_cost_metric(row["estimated_cost_usd"]),
+                }
+                for row in model_usage_rows
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        st.info("No model usage data is available yet.")
+
+    st.divider()
+    st.markdown("**Knowledge Base**")
+    kb_column, kb_detail_column = st.columns((1, 1))
+    with kb_column:
+        st.write(f"Status: {format_kb_status_label(kb_status).removeprefix('Status: ')}")
+        st.caption(kb_status.summary)
+        st.write(
+            "Rebuild action available: "
+            + ("Yes" if should_show_kb_rebuild_trigger(kb_status) else "No")
+        )
+    with kb_detail_column:
+        st.caption(kb_status.detail)
+        if kb_status.rebuild_command is not None:
+            st.caption("Manual rebuild command")
+            st.code(kb_status.rebuild_command, language="bash")
+
+    st.markdown("**Evaluation**")
+    with st.container():
+        try:
+            eval_cases = load_eval_cases_fn()
+            evaluation_case_count = len(eval_cases)
+            evaluation_dataset_error = None
+        except Exception as exc:
+            evaluation_case_count = 0
+            evaluation_dataset_error = str(exc)
+
+        top_row = st.columns(2)
+        top_row[0].metric("Evaluation cases", evaluation_case_count)
+        top_row[1].metric(
+            "Snapshot available",
+            "Yes" if st.session_state.get(ANALYTICS_EVAL_REPORT_KEY) else "No",
+        )
+
+        if evaluation_dataset_error is not None:
+            st.error(f"Evaluation dataset unavailable: {evaluation_dataset_error}")
+
+        if st.button("Run evaluation snapshot", key="run_evaluation_snapshot"):
+            with st.status("Running evaluation snapshot...", expanded=True) as status:
+                status.write(f"Loading evaluation cases from {settings.raw_data_dir.parent / 'eval' / 'eval_cases.json'}")
+                try:
+                    report = run_evaluation_fn()
+                except Exception as exc:
+                    st.session_state[ANALYTICS_EVAL_REPORT_KEY] = None
+                    st.session_state[ANALYTICS_EVAL_ERROR_KEY] = f"Evaluation failed: {exc}"
+                    status.update(label="Evaluation snapshot failed", state="error")
+                else:
+                    st.session_state[ANALYTICS_EVAL_REPORT_KEY] = report.model_dump()
+                    st.session_state[ANALYTICS_EVAL_ERROR_KEY] = None
+                    status.update(label="Evaluation snapshot completed", state="complete")
+
+        evaluation_error = st.session_state.get(ANALYTICS_EVAL_ERROR_KEY)
+        if isinstance(evaluation_error, str) and evaluation_error:
+            st.error(evaluation_error)
+
+        evaluation_report_payload = st.session_state.get(ANALYTICS_EVAL_REPORT_KEY)
+        evaluation_summary_metrics = build_evaluation_summary_metrics(
+            evaluation_report_payload
+        )
+        if evaluation_summary_metrics is not None:
+            summary_columns = st.columns(3)
+            summary_columns[0].metric(
+                "Source recall",
+                f"{evaluation_summary_metrics['average_source_recall']:.4f}",
+            )
+            summary_columns[1].metric(
+                "Keyword recall",
+                f"{evaluation_summary_metrics['average_keyword_recall']:.4f}",
+            )
+            summary_columns[2].metric(
+                "Context match",
+                f"{evaluation_summary_metrics['context_match_rate']:.4f}",
+            )
+
+            summary_columns = st.columns(3)
+            summary_columns[0].metric(
+                "No-context fallback rate",
+                f"{evaluation_summary_metrics['no_context_fallback_rate']:.4f}",
+            )
+            summary_columns[1].metric(
+                "Sources-present rate",
+                f"{evaluation_summary_metrics['sources_present_rate_when_context_used']:.4f}",
+            )
+            summary_columns[2].metric(
+                "Case count",
+                evaluation_summary_metrics["case_count"],
+            )
+
+            evaluation_case_rows = build_evaluation_case_rows(
+                evaluation_report_payload,
+                limit=10,
+            )
+            if evaluation_case_rows:
+                st.dataframe(
+                    evaluation_case_rows,
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+    st.divider()
+    st.markdown("**Recent Diagnostics**")
+    if recent_diagnostics_rows:
+        st.dataframe(
+            recent_diagnostics_rows,
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        st.info("No recent turn diagnostics are available yet.")
+
+
+def _format_cost_metric(value: object) -> str:
+    if isinstance(value, int | float):
+        return f"${value:.6f}"
+    return "n/a"
+
+
+def build_response_behavior_chart_rows(
+    response_breakdown: list[dict[str, int | float | str]],
+) -> list[dict[str, int | str]]:
+    return [
+        {
+            "response_type": str(row["response_type"]),
+            "count": int(row["count"]),
+        }
+        for row in response_breakdown
+    ]
+
+
+def build_response_behavior_chart(
+    response_breakdown: list[dict[str, int | float | str]],
+):
+    return build_horizontal_bar_chart(
+        chart_rows=build_response_behavior_chart_rows(response_breakdown),
+        category_field="response_type",
+        value_field="count",
+        category_title="Response type",
+        value_title="Count",
+    )
+
+
+def build_model_usage_chart_rows(
+    model_usage_rows: list[dict[str, int | float | str | None]],
+) -> list[dict[str, int | str]]:
+    return [
+        {
+            "model": str(row["model"]),
+            "total_tokens": int(row["total_tokens"]),
+        }
+        for row in model_usage_rows
+    ]
+
+
+def build_model_usage_chart(
+    model_usage_rows: list[dict[str, int | float | str | None]],
+):
+    return build_horizontal_bar_chart(
+        chart_rows=build_model_usage_chart_rows(model_usage_rows),
+        category_field="model",
+        value_field="total_tokens",
+        category_title="Model",
+        value_title="Total tokens",
+    )
+
+
+def build_horizontal_bar_chart(
+    *,
+    chart_rows: list[dict[str, int | str]],
+    category_field: str,
+    value_field: str,
+    category_title: str,
+    value_title: str,
+):
+    return (
+        alt.Chart(alt.Data(values=chart_rows))
+        .mark_bar()
+        .encode(
+            x=alt.X(f"{value_field}:Q", title=value_title),
+            y=alt.Y(
+                f"{category_field}:N",
+                title=category_title,
+                sort="-x",
+                axis=alt.Axis(labelLimit=400),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{category_field}:N", title=category_title),
+                alt.Tooltip(f"{value_field}:Q", title=value_title),
+            ],
+        )
+        .properties(height=max(160, len(chart_rows) * 40))
+    )
+
+
+def build_chat_input_visibility_script() -> str:
+    return """
+    <script>
+    const parentWindow = window.parent;
+    const parentDocument = parentWindow.document;
+
+    function syncChatInputVisibility() {
+      const chatInput = parentDocument.querySelector('div[data-testid="stChatInput"]');
+      const tabButtons = Array.from(parentDocument.querySelectorAll('button[role="tab"]'));
+      const chatTab = tabButtons.find((button) => button.textContent.trim() === 'Chat');
+      const analyticsTab = tabButtons.find((button) => button.textContent.trim() === 'Analytics');
+      if (!chatInput || !chatTab || !analyticsTab) {
+        return;
+      }
+      const shouldShow = chatTab.getAttribute('aria-selected') === 'true';
+      chatInput.style.display = shouldShow ? '' : 'none';
+    }
+
+    if (parentWindow.__ragAssistantChatInputObserver) {
+      parentWindow.__ragAssistantChatInputObserver.disconnect();
+    }
+
+    const observer = new MutationObserver(syncChatInputVisibility);
+    observer.observe(parentDocument.body, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
+    parentWindow.__ragAssistantChatInputObserver = observer;
+    syncChatInputVisibility();
+    </script>
+    """
+
+
+def render_chat_input_visibility_controller() -> None:
+    components.html(build_chat_input_visibility_script(), height=0, width=0)
+
+
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -878,13 +1334,25 @@ def main() -> None:
         st.session_state["request_timestamps"] = []
     if CHAT_MODEL_SESSION_KEY not in st.session_state:
         st.session_state[CHAT_MODEL_SESSION_KEY] = settings.default_chat_model
+    if ANALYTICS_EVAL_REPORT_KEY not in st.session_state:
+        st.session_state[ANALYTICS_EVAL_REPORT_KEY] = None
+    if ANALYTICS_EVAL_ERROR_KEY not in st.session_state:
+        st.session_state[ANALYTICS_EVAL_ERROR_KEY] = None
 
     kb_status = get_kb_status(settings)
     render_help_section(settings, st.session_state["conversation_history"], kb_status)
 
-    render_latest_turn()
-
+    chat_tab, analytics_tab = st.tabs(["Chat", "Analytics"])
+    with chat_tab:
+        render_latest_turn()
+    with analytics_tab:
+        render_analytics_dashboard(
+            settings=settings,
+            conversation_history=st.session_state["conversation_history"],
+            kb_status=kb_status,
+        )
     question = st.chat_input("Ask a question about the knowledge base")
+    render_chat_input_visibility_controller()
     if not question:
         return
 
@@ -914,19 +1382,27 @@ def main() -> None:
                 )
                 return
 
-            status.write("Loading resources")
-            selected_chat_model = validate_selected_chat_model(
-                st.session_state.get(CHAT_MODEL_SESSION_KEY),
-                settings,
-            )
-            vector_store = get_vector_store(settings)
-            chat_model = get_chat_model(settings, selected_chat_model)
-            status.write("Processing request")
-            result = run_backend_query(
-                query=validated_query,
-                vector_store=vector_store,
-                chat_model=chat_model,
-            )
+            if should_skip_resource_loading(validated_query):
+                status.write("Handling request with a deterministic tool")
+                result = run_backend_query(
+                    query=validated_query,
+                    vector_store=None,
+                    chat_model=None,
+                )
+            else:
+                status.write("Loading resources")
+                selected_chat_model = validate_selected_chat_model(
+                    st.session_state.get(CHAT_MODEL_SESSION_KEY),
+                    settings,
+                )
+                vector_store = get_vector_store(settings)
+                chat_model = get_chat_model(settings, selected_chat_model)
+                status.write("Processing request")
+                result = run_backend_query(
+                    query=validated_query,
+                    vector_store=vector_store,
+                    chat_model=chat_model,
+                )
             status.update(label="Request completed", state="complete")
         except AppValidationError as exc:
             LOGGER.info(

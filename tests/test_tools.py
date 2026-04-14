@@ -1,6 +1,10 @@
+import re
+
 import pytest
+import src.tools as tools
 
 from src.tools import (
+    _extract_number,
     diagnose_stack_error,
     estimate_openai_cost,
     maybe_invoke_tool,
@@ -101,14 +105,28 @@ def test_maybe_invoke_tool_matches_retrieval_config_request() -> None:
 
 def test_maybe_invoke_tool_matches_calculate_cost_phrasing() -> None:
     result = maybe_invoke_tool(
-        "Calculate OpenAI cost for gpt-4.1-mini with 1000 input tokens "
-        "and 500 output tokens for 3 calls"
+        "Estimate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, "
+        "500 output tokens, and 3 calls"
     )
 
     assert result is not None
     assert result.tool_name == "estimate_openai_cost"
     assert result.tool_error is None
+    assert result.tool_input.num_calls == 3
     assert result.tool_output.estimated_total_cost_usd == pytest.approx(0.0036)
+
+
+def test_extract_number_skips_empty_match_groups(monkeypatch) -> None:
+    monkeypatch.setitem(
+        tools.TOKEN_PATTERNS,
+        "input_tokens",
+        [
+            re.compile(r"()"),
+            re.compile(r"([\d,]+)\s*input tokens"),
+        ],
+    )
+
+    assert _extract_number("1000 input tokens", "input_tokens") == 1000
 
 
 def test_maybe_invoke_tool_returns_validation_error_for_missing_cost_parameters() -> None:

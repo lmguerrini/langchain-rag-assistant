@@ -310,9 +310,7 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_cli_args(argv)
     try:
-        answer_fn = _build_runtime_answer_fn()
-        cases = load_eval_cases(args.cases)
-        report = run_evaluation(answer_fn=answer_fn, cases=cases)
+        report = run_runtime_evaluation(cases_path=args.cases)
     except Exception as exc:
         print(f"Evaluation failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -336,6 +334,15 @@ def _format_optional_metric(value: bool | None) -> str:
     if value is None:
         return "n/a"
     return str(value)
+
+
+def run_runtime_evaluation(
+    *,
+    cases_path: Path = DEFAULT_EVAL_CASES_PATH,
+) -> EvaluationReport:
+    answer_fn = _build_runtime_answer_fn()
+    cases = load_eval_cases(cases_path)
+    return run_evaluation(answer_fn=answer_fn, cases=cases)
 
 
 def _build_runtime_answer_fn() -> Callable[[str], AnswerResult]:

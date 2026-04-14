@@ -10,12 +10,18 @@ from build_index import KBRebuildResult
 from app import (
     AppValidationError,
     build_chat_model_cache_inputs,
+    build_chat_input_visibility_script,
     build_conversation_csv,
     build_conversation_json,
     build_conversation_markdown,
     build_conversation_pdf,
     build_conversation_snapshot,
+    build_model_usage_chart,
+    build_official_docs_display_data,
+    build_model_usage_chart_rows,
     build_pdf_detail_lines,
+    build_response_behavior_chart,
+    build_response_behavior_chart_rows,
     build_session_usage_totals,
     build_turn_record,
     build_vector_store_cache_inputs,
@@ -37,6 +43,7 @@ from app import (
     parse_source_string,
     run_kb_rebuild_action,
     should_show_kb_rebuild_trigger,
+    should_skip_resource_loading,
     validate_selected_chat_model,
     validate_query,
 )
@@ -142,6 +149,150 @@ def test_build_turn_record_keeps_only_ui_fields() -> None:
             "estimated_cost_usd": 0.000024,
         },
     }
+
+
+def test_should_skip_resource_loading_only_for_tool_queries() -> None:
+    assert should_skip_resource_loading(
+        "Estimate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, 500 output tokens, and 3 calls"
+    ) is True
+    assert should_skip_resource_loading("Estimate OpenAI cost") is True
+    assert should_skip_resource_loading(
+        "How should I persist and rebuild the Chroma index locally?"
+    ) is False
+
+
+def test_build_official_docs_display_data_formats_readable_documents() -> None:
+    display_data = build_official_docs_display_data(
+        {
+            "library": "langchain",
+            "answer": "Start with a simple retrieval pipeline.",
+            "lookup_result": {
+                "library": "langchain",
+                "documents": [
+                    {
+                        "title": "Build a RAG agent with LangChain",
+                        "url": "https://docs.langchain.com/guides/rag",
+                        "provider_mode": "official_mcp",
+                        "snippets": [
+                            {"text": "Start with a simple retrieval pipeline.", "rank": 1},
+                            {"text": "Keep the first version narrow and testable.", "rank": 2},
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert display_data == {
+        "library": "LangChain",
+        "documents": [
+            {
+                "title": "Build a RAG agent with LangChain",
+                "url": "https://docs.langchain.com/guides/rag",
+                "provider_label": "Provider: Official MCP",
+                "snippets": [
+                    "Start with a simple retrieval pipeline.",
+                    "Keep the first version narrow and testable.",
+                ],
+            }
+        ],
+    }
+
+
+def test_build_official_docs_display_data_handles_missing_or_empty_documents() -> None:
+    assert build_official_docs_display_data(None) is None
+    assert build_official_docs_display_data(
+        {
+            "library": "openai",
+            "lookup_result": {
+                "library": "openai",
+                "documents": [],
+            },
+        }
+    ) == {
+        "library": "OpenAI",
+        "documents": [],
+    }
+
+
+def test_build_response_behavior_chart_rows_keeps_chart_friendly_shape() -> None:
+    assert build_response_behavior_chart_rows(
+        [
+            {"response_type": "Grounded answer", "count": 4, "share": 0.4},
+            {"response_type": "Tool result", "count": 2, "share": 0.2},
+        ]
+    ) == [
+        {"response_type": "Grounded answer", "count": 4},
+        {"response_type": "Tool result", "count": 2},
+    ]
+
+
+def test_build_model_usage_chart_rows_keeps_chart_friendly_shape() -> None:
+    assert build_model_usage_chart_rows(
+        [
+            {
+                "model": "gpt-4.1-mini",
+                "request_count": 2,
+                "input_tokens": 40,
+                "output_tokens": 20,
+                "total_tokens": 60,
+                "estimated_cost_usd": 0.000024,
+            }
+        ]
+    ) == [
+        {
+            "model": "gpt-4.1-mini",
+            "total_tokens": 60,
+        }
+    ]
+
+
+def test_build_response_behavior_chart_is_horizontal() -> None:
+    chart = build_response_behavior_chart(
+        [
+            {"response_type": "Grounded answer", "count": 4, "share": 0.4},
+            {"response_type": "Tool result", "count": 2, "share": 0.2},
+        ]
+    )
+    chart_dict = chart.to_dict(validate=False)
+
+    assert chart_dict["mark"] == {"type": "bar"}
+    assert chart_dict["encoding"]["x"]["field"] == "count"
+    assert chart_dict["encoding"]["x"]["type"] == "quantitative"
+    assert chart_dict["encoding"]["y"]["field"] == "response_type"
+    assert chart_dict["encoding"]["y"]["type"] == "nominal"
+
+
+def test_build_model_usage_chart_is_horizontal() -> None:
+    chart = build_model_usage_chart(
+        [
+            {
+                "model": "gpt-4.1-mini",
+                "request_count": 2,
+                "input_tokens": 40,
+                "output_tokens": 20,
+                "total_tokens": 60,
+                "estimated_cost_usd": 0.000024,
+            }
+        ]
+    )
+    chart_dict = chart.to_dict(validate=False)
+
+    assert chart_dict["mark"] == {"type": "bar"}
+    assert chart_dict["encoding"]["x"]["field"] == "total_tokens"
+    assert chart_dict["encoding"]["x"]["type"] == "quantitative"
+    assert chart_dict["encoding"]["y"]["field"] == "model"
+    assert chart_dict["encoding"]["y"]["type"] == "nominal"
+
+
+def test_build_chat_input_visibility_script_targets_chat_tab_and_chat_input() -> None:
+    script = build_chat_input_visibility_script()
+
+    assert 'div[data-testid="stChatInput"]' in script
+    assert "button[role=\"tab\"]" in script
+    assert "Chat" in script
+    assert "Analytics" in script
+    assert "aria-selected" in script
 
 
 def test_get_response_type_label_maps_turn_variants() -> None:

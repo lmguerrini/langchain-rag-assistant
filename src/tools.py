@@ -32,6 +32,7 @@ TOKEN_PATTERNS = {
     "num_calls": [
         re.compile(r"(?:num_calls|calls)\s*=?\s*([\d,]+)"),
         re.compile(r"for\s+([\d,]+)\s+calls"),
+        re.compile(r"([\d,]+)\s+calls"),
     ],
 }
 
@@ -434,7 +435,13 @@ def _extract_number(query: str, field_name: str) -> int | None:
     for pattern in TOKEN_PATTERNS[field_name]:
         match = pattern.search(query)
         if match is not None:
-            return int(match.group(1).replace(",", ""))
+            captured_value = match.group(1).strip()
+            if not captured_value:
+                continue
+            try:
+                return int(captured_value.replace(",", ""))
+            except ValueError:
+                continue
     return None
 
 

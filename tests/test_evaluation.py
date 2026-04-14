@@ -18,6 +18,7 @@ from src.evaluation import (
     load_eval_cases,
     parse_cli_args,
     main,
+    run_runtime_evaluation,
     run_evaluation,
     summarize_results,
 )
@@ -471,6 +472,39 @@ def test_main_keeps_readable_failure_behavior_with_custom_cases_arg(
 
     captured = capsys.readouterr()
     assert "Evaluation failed: Connection error." in captured.err
+
+
+def test_run_runtime_evaluation_uses_requested_cases_path(monkeypatch, tmp_path: Path) -> None:
+    dataset_path = tmp_path / "custom_eval_cases.json"
+    dataset_path.write_text("[]", encoding="utf-8")
+    loaded_paths: list[Path] = []
+
+    monkeypatch.setattr(
+        "src.evaluation._build_runtime_answer_fn",
+        lambda: (lambda question: _make_answer_result(
+            answer="Persist the Chroma collection locally.",
+            used_context=True,
+            source_titles=["Chroma Persistence and Reindexing Guide"],
+        )),
+    )
+
+    def fake_load_eval_cases(path: Path = DEFAULT_EVAL_CASES_PATH):
+        loaded_paths.append(path)
+        return [
+            EvalCase(
+                question="How should I persist Chroma locally?",
+                expected_source_titles=["Chroma Persistence and Reindexing Guide"],
+                expected_keywords=["chroma", "persist"],
+                expect_context=True,
+            )
+        ]
+
+    monkeypatch.setattr("src.evaluation.load_eval_cases", fake_load_eval_cases)
+
+    report = run_runtime_evaluation(cases_path=dataset_path)
+
+    assert loaded_paths == [dataset_path]
+    assert report.summary.case_count == 1
 
 
 def _make_answer_result(
