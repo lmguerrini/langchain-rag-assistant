@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 import sys
@@ -290,10 +291,28 @@ def format_evaluation_report(report: EvaluationReport) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
+def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the custom evaluation workflow for the local RAG system."
+    )
+    parser.add_argument(
+        "--cases",
+        type=Path,
+        default=DEFAULT_EVAL_CASES_PATH,
+        help=(
+            "Path to the evaluation cases JSON file. "
+            f"Defaults to {DEFAULT_EVAL_CASES_PATH}."
+        ),
+    )
+    return parser.parse_args(argv if argv is not None else [])
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_cli_args(argv)
     try:
         answer_fn = _build_runtime_answer_fn()
-        report = run_evaluation(answer_fn=answer_fn)
+        cases = load_eval_cases(args.cases)
+        report = run_evaluation(answer_fn=answer_fn, cases=cases)
     except Exception as exc:
         print(f"Evaluation failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -348,4 +367,4 @@ def _build_runtime_answer_fn() -> Callable[[str], AnswerResult]:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

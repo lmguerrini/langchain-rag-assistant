@@ -6,6 +6,7 @@ import pytest
 from src.chains import NO_CONTEXT_FALLBACK
 from src.evaluation import (
     AnswerEvaluationResult,
+    DEFAULT_EVAL_CASES_PATH,
     EvalCase,
     EvaluationCaseResult,
     EvaluationReport,
@@ -15,6 +16,7 @@ from src.evaluation import (
     evaluate_retrieval_quality,
     format_evaluation_report,
     load_eval_cases,
+    parse_cli_args,
     main,
     run_evaluation,
     summarize_results,
@@ -360,6 +362,112 @@ def test_main_prints_readable_error_when_runtime_evaluation_fails(monkeypatch, c
 
     with pytest.raises(SystemExit, match="1"):
         main()
+
+    captured = capsys.readouterr()
+    assert "Evaluation failed: Connection error." in captured.err
+
+
+def test_parse_cli_args_defaults_to_default_cases_path() -> None:
+    args = parse_cli_args([])
+
+    assert args.cases == DEFAULT_EVAL_CASES_PATH
+
+
+def test_main_uses_custom_cases_path_from_cli(monkeypatch, tmp_path: Path, capsys) -> None:
+    dataset_path = tmp_path / "custom_eval_cases.json"
+    dataset_path.write_text(
+        json.dumps(
+            [
+                {
+                    "question": "How should I persist Chroma locally?",
+                    "expected_source_titles": ["Chroma Persistence and Reindexing Guide"],
+                    "expected_keywords": ["chroma", "persist"],
+                    "expect_context": True,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded_paths: list[Path] = []
+
+    def fake_load_eval_cases(path: Path = DEFAULT_EVAL_CASES_PATH):
+        loaded_paths.append(path)
+        return [
+            EvalCase(
+                question="How should I persist Chroma locally?",
+                expected_source_titles=["Chroma Persistence and Reindexing Guide"],
+                expected_keywords=["chroma", "persist"],
+                expect_context=True,
+            )
+        ]
+
+    monkeypatch.setattr("src.evaluation.load_eval_cases", fake_load_eval_cases)
+    monkeypatch.setattr(
+        "src.evaluation._build_runtime_answer_fn",
+        lambda: (lambda question: _make_answer_result(
+            answer="Persist the Chroma collection locally.",
+            used_context=True,
+            source_titles=["Chroma Persistence and Reindexing Guide"],
+        )),
+    )
+
+    main(["--cases", str(dataset_path)])
+    captured = capsys.readouterr()
+
+    assert loaded_paths == [dataset_path]
+    assert "Evaluation Report" in captured.out
+
+
+def test_main_uses_default_cases_path_when_cli_flag_is_omitted(monkeypatch, capsys) -> None:
+    loaded_paths: list[Path] = []
+
+    def fake_load_eval_cases(path: Path = DEFAULT_EVAL_CASES_PATH):
+        loaded_paths.append(path)
+        return [
+            EvalCase(
+                question="How should I persist Chroma locally?",
+                expected_source_titles=["Chroma Persistence and Reindexing Guide"],
+                expected_keywords=["chroma", "persist"],
+                expect_context=True,
+            )
+        ]
+
+    monkeypatch.setattr("src.evaluation.load_eval_cases", fake_load_eval_cases)
+    monkeypatch.setattr(
+        "src.evaluation._build_runtime_answer_fn",
+        lambda: (lambda question: _make_answer_result(
+            answer="Persist the Chroma collection locally.",
+            used_context=True,
+            source_titles=["Chroma Persistence and Reindexing Guide"],
+        )),
+    )
+
+    main([])
+    captured = capsys.readouterr()
+
+    assert loaded_paths == [DEFAULT_EVAL_CASES_PATH]
+    assert "Summary" in captured.out
+
+
+def test_main_keeps_readable_failure_behavior_with_custom_cases_arg(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    dataset_path = tmp_path / "custom_eval_cases.json"
+    dataset_path.write_text("[]", encoding="utf-8")
+
+    def fail_build_runtime_answer_fn():
+        raise RuntimeError("Connection error.")
+
+    monkeypatch.setattr(
+        "src.evaluation._build_runtime_answer_fn",
+        fail_build_runtime_answer_fn,
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        main(["--cases", str(dataset_path)])
 
     captured = capsys.readouterr()
     assert "Evaluation failed: Connection error." in captured.err
