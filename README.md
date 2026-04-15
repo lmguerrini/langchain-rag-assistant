@@ -82,7 +82,7 @@ pip install -r requirements.txt
 
 ### Configure environment
 
-Create a `.env` file or export the required variable:
+Create a `.env` file based on `.env.example`, or export the required environment variables:
 
 ```bash
 export OPENAI_API_KEY=your_api_key_here
