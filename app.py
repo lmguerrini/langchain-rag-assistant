@@ -24,7 +24,11 @@ from src.analytics import (
     build_response_type_breakdown,
     build_usage_totals,
 )
-from src.chains import run_backend_query
+from src.chains import (
+    maybe_match_official_docs_query,
+    run_backend_query,
+    stream_answer_query,
+)
 from src.config import Settings, get_settings
 from src.evaluation import load_eval_cases, run_runtime_evaluation
 from src.kb_status import KBStatusResult, get_kb_status
@@ -1525,6 +1529,33 @@ def render_chat_input_visibility_controller() -> None:
     components.html(build_chat_input_visibility_script(), height=0, width=0)
 
 
+def render_streaming_grounded_answer(
+    *,
+    query: str,
+    vector_store,
+    chat_model,
+) -> AnswerResult:
+    streamed_tokens: list[str] = []
+    with st.chat_message("user"):
+        st.write(query)
+    with st.chat_message("assistant"):
+        answer_placeholder = st.empty()
+
+        def render_token(token: str) -> None:
+            streamed_tokens.append(token)
+            answer_placeholder.write("".join(streamed_tokens))
+
+        result = stream_answer_query(
+            query=query,
+            vector_store=vector_store,
+            chat_model=chat_model,
+            on_token=render_token,
+        )
+        if not streamed_tokens:
+            answer_placeholder.write(result.answer)
+        return result
+
+
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -1589,6 +1620,7 @@ def main() -> None:
                 )
                 return
 
+            stream_grounded_answer = False
             if should_skip_resource_loading(validated_query):
                 status.write("Handling request with a deterministic tool")
                 result = run_backend_query(
@@ -1604,12 +1636,16 @@ def main() -> None:
                 )
                 vector_store = get_vector_store(settings)
                 chat_model = get_chat_model(settings, selected_chat_model)
-                status.write("Processing request")
-                result = run_backend_query(
-                    query=validated_query,
-                    vector_store=vector_store,
-                    chat_model=chat_model,
-                )
+                if maybe_match_official_docs_query(validated_query) is not None:
+                    status.write("Processing official docs request")
+                    result = run_backend_query(
+                        query=validated_query,
+                        vector_store=vector_store,
+                        chat_model=chat_model,
+                    )
+                else:
+                    status.write("Preparing grounded response")
+                    stream_grounded_answer = True
             status.update(label="Request completed", state="complete")
         except AppValidationError as exc:
             LOGGER.info(
@@ -1622,6 +1658,18 @@ def main() -> None:
         except Exception as exc:
             LOGGER.exception("backend_error %s", safe_metadata if "safe_metadata" in locals() else {})
             status.update(label="Request failed", state="error")
+            st.error(get_user_facing_error_message(exc))
+            return
+
+    if stream_grounded_answer:
+        try:
+            result = render_streaming_grounded_answer(
+                query=validated_query,
+                vector_store=vector_store,
+                chat_model=chat_model,
+            )
+        except Exception as exc:
+            LOGGER.exception("backend_error %s", safe_metadata if "safe_metadata" in locals() else {})
             st.error(get_user_facing_error_message(exc))
             return
 

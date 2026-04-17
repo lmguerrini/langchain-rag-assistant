@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Protocol
+
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from src.llm_response_utils import (
     CHAT_MODEL_PRICING_PER_MILLION,
@@ -62,7 +65,12 @@ if UNPRICED_SUPPORTED_CHAT_MODELS:
 
 
 class ChatModelLike(Protocol):
-    def invoke(self, prompt: str):
+    def invoke(self, prompt: list[BaseMessage]):
+        ...
+
+
+class StreamingChatModelLike(ChatModelLike, Protocol):
+    def stream(self, prompt: list[BaseMessage]):
         ...
 
 
@@ -95,6 +103,61 @@ def answer_query(
     model_response = chat_model.invoke(prompt)
     answer_text = extract_text(model_response)
     usage = extract_request_usage(model_response, chat_model=chat_model)
+
+    return AnswerResult(
+        answer=answer_text,
+        used_context=True,
+        retrieval=retrieval_result,
+        answer_sources=retrieval_result.sources,
+        tool_result=None,
+        official_docs_result=None,
+        usage=usage,
+    )
+
+
+def stream_answer_query(
+    *,
+    query: str,
+    vector_store,
+    chat_model: StreamingChatModelLike,
+    on_token: Callable[[str], None],
+    top_k: int = 3,
+) -> AnswerResult:
+    request = RetrievalRequest(query=query, top_k=top_k)
+    retrieval_result = retrieve_chunks(
+        vector_store=vector_store,
+        request=request,
+    )
+
+    if not retrieval_result.chunks:
+        return AnswerResult(
+            answer=NO_CONTEXT_FALLBACK,
+            used_context=False,
+            retrieval=retrieval_result,
+            answer_sources=[],
+            usage=None,
+        )
+
+    prompt = build_grounded_prompt(
+        original_query=request.query,
+        retrieval=retrieval_result,
+    )
+    answer_parts: list[str] = []
+    last_chunk = None
+    for chunk in chat_model.stream(prompt):
+        last_chunk = chunk
+        token = _extract_stream_chunk_text(chunk)
+        if not token:
+            continue
+        answer_parts.append(token)
+        on_token(token)
+
+    answer_text = "".join(answer_parts).strip()
+    usage = (
+        extract_request_usage(last_chunk, chat_model=chat_model)
+        if last_chunk is not None
+        else None
+    )
 
     return AnswerResult(
         answer=answer_text,
@@ -152,7 +215,18 @@ def run_backend_query(
     )
 
 
-def build_grounded_prompt(*, original_query: str, retrieval: RetrievalResult) -> str:
+def _extract_stream_chunk_text(chunk) -> str:
+    content = getattr(chunk, "content", chunk)
+    if isinstance(content, str):
+        return content
+    return str(content)
+
+
+def build_grounded_prompt(
+    *,
+    original_query: str,
+    retrieval: RetrievalResult,
+) -> list[BaseMessage]:
     context_blocks = []
     for index, chunk in enumerate(retrieval.chunks, start=1):
         context_blocks.append(f"[Chunk {index}]\n{chunk.content}")
@@ -160,13 +234,19 @@ def build_grounded_prompt(*, original_query: str, retrieval: RetrievalResult) ->
     source_lines = "\n".join(f"- {source}" for source in retrieval.sources)
     context_text = "\n\n".join(context_blocks)
 
-    return (
-        f"{DOMAIN_SYSTEM_PROMPT}\n\n"
+    query_prompt = (
         f"User query: {original_query}\n"
-        f"Retrieval query: {retrieval.rewritten_query}\n\n"
-        f"Retrieved context:\n{context_text}\n\n"
-        f"Sources:\n{source_lines}"
+        f"Retrieval query: {retrieval.rewritten_query}"
     )
+    context_prompt = f"Retrieved context:\n{context_text}"
+    sources_prompt = f"Sources:\n{source_lines}"
+
+    return [
+        SystemMessage(content=DOMAIN_SYSTEM_PROMPT),
+        HumanMessage(content=query_prompt),
+        HumanMessage(content=context_prompt),
+        HumanMessage(content=sources_prompt),
+    ]
 
 
 def maybe_match_official_docs_query(query: str) -> OfficialDocsLookupRequest | None:
