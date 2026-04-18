@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.llm_response_utils import estimate_usage_cost_usd
+
 
 def get_response_type_label(turn: dict[str, object]) -> str:
     if turn.get("tool_result"):
@@ -54,7 +56,7 @@ def format_request_usage_label(turn: dict[str, object]) -> str:
         return "No LLM usage"
 
     model_name = usage.get("model_name") or "unknown model"
-    cost = usage.get("estimated_cost_usd")
+    cost = estimate_usage_cost_usd(usage)
     cost_text = (
         f"${cost:.6f}"
         if isinstance(cost, int | float)
@@ -78,7 +80,7 @@ def build_session_usage_totals(
     if not usage_entries:
         return None
 
-    estimated_costs = [entry.get("estimated_cost_usd") for entry in usage_entries]
+    estimated_costs = [estimate_usage_cost_usd(entry) for entry in usage_entries]
     return {
         "request_count": len(usage_entries),
         "input_tokens": sum(entry["input_tokens"] for entry in usage_entries),

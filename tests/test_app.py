@@ -1424,11 +1424,11 @@ def test_format_request_usage_label_handles_grounded_official_docs_tool_and_fall
             "library": "langchain",
         },
         "usage": {
-            "model_name": "gpt-4.1-mini",
+            "model_name": "gpt-4.1-mini-2025-04-14",
             "input_tokens": 18,
             "output_tokens": 7,
             "total_tokens": 25,
-            "estimated_cost_usd": 0.000018,
+            "estimated_cost_usd": None,
         },
     }
     tool_turn = {
@@ -1460,7 +1460,8 @@ def test_format_request_usage_label_handles_grounded_official_docs_tool_and_fall
         "LLM usage: gpt-4.1-mini | 20 in / 10 out / 30 total | $0.000024"
     )
     assert format_request_usage_label(official_docs_turn) == (
-        "LLM usage: gpt-4.1-mini | 18 in / 7 out / 25 total | $0.000018"
+        "LLM usage: gpt-4.1-mini-2025-04-14 | "
+        "18 in / 7 out / 25 total | $0.000018"
     )
     assert format_request_usage_label(tool_turn) == "No LLM usage"
     assert format_request_usage_label(unavailable_turn) == "Usage unavailable"
@@ -1490,11 +1491,11 @@ def test_build_session_usage_totals_sums_usage_from_history() -> None:
             "sources": [],
             "tool_result": None,
             "usage": {
-                "model_name": "gpt-4.1-mini",
+                "model_name": "gpt-4.1-mini-2025-04-14",
                 "input_tokens": 15,
                 "output_tokens": 5,
                 "total_tokens": 20,
-                "estimated_cost_usd": 0.000014,
+                "estimated_cost_usd": None,
             },
         },
         {
@@ -1518,6 +1519,33 @@ def test_build_session_usage_totals_sums_usage_from_history() -> None:
     }
     assert format_session_usage_label(conversation_history) == (
         "2 requests | 50 total tokens | $0.000038"
+    )
+
+
+def test_build_session_usage_totals_keeps_unknown_model_cost_unavailable() -> None:
+    conversation_history = [
+        {
+            "query": "q1",
+            "answer": "a1",
+            "used_context": True,
+            "sources": [],
+            "tool_result": None,
+            "usage": {
+                "model_name": "gpt-unknown-2025-04-14",
+                "input_tokens": 18,
+                "output_tokens": 7,
+                "total_tokens": 25,
+                "estimated_cost_usd": None,
+            },
+        }
+    ]
+
+    totals = build_session_usage_totals(conversation_history)
+
+    assert totals is not None
+    assert totals["estimated_cost_usd"] is None
+    assert format_session_usage_label(conversation_history) == (
+        "1 requests | 25 total tokens | Cost unavailable"
     )
 
 

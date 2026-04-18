@@ -4,6 +4,7 @@ from collections import Counter
 from collections.abc import Mapping
 
 from src.kb_status import KBStatusResult
+from src.llm_response_utils import estimate_usage_cost_usd
 
 
 RESPONSE_TYPE_ORDER = (
@@ -42,7 +43,7 @@ def build_usage_totals(
             "estimated_cost_usd": None,
         }
 
-    estimated_costs = [usage.get("estimated_cost_usd") for usage in usage_entries]
+    estimated_costs = [estimate_usage_cost_usd(usage) for usage in usage_entries]
     return {
         "request_count": len(usage_entries),
         "input_tokens": sum(int(usage["input_tokens"]) for usage in usage_entries),
@@ -149,7 +150,7 @@ def build_model_usage_breakdown(
         aggregate["output_tokens"] = int(aggregate["output_tokens"]) + int(usage["output_tokens"])
         aggregate["total_tokens"] = int(aggregate["total_tokens"]) + int(usage["total_tokens"])
 
-        estimated_cost = usage.get("estimated_cost_usd")
+        estimated_cost = estimate_usage_cost_usd(usage)
         if isinstance(estimated_cost, int | float) and aggregate["has_complete_costs"]:
             aggregate["estimated_cost_usd"] = (
                 float(aggregate["estimated_cost_usd"]) + float(estimated_cost)
@@ -205,9 +206,8 @@ def build_recent_diagnostics_rows(
                     else None
                 ),
                 "estimated_cost_usd": (
-                    round(float(usage["estimated_cost_usd"]), 6)
+                    estimate_usage_cost_usd(usage)
                     if isinstance(usage, Mapping)
-                    and isinstance(usage.get("estimated_cost_usd"), int | float)
                     else None
                 ),
             }

@@ -117,6 +117,68 @@ def test_build_usage_totals_and_overview_metrics_aggregate_real_usage() -> None:
     assert overview["kb_state"] == "up_to_date"
 
 
+def test_build_usage_totals_infers_versioned_model_cost_when_missing() -> None:
+    history = [
+        {
+            "used_context": True,
+            "tool_result": None,
+            "official_docs_result": None,
+            "usage": {
+                "model_name": "gpt-4.1-mini",
+                "input_tokens": 20,
+                "output_tokens": 10,
+                "total_tokens": 30,
+                "estimated_cost_usd": 0.000024,
+            },
+        },
+        {
+            "used_context": False,
+            "tool_result": None,
+            "official_docs_result": {"library": "openai"},
+            "usage": {
+                "model_name": "gpt-4.1-mini-2025-04-14",
+                "input_tokens": 18,
+                "output_tokens": 7,
+                "total_tokens": 25,
+                "estimated_cost_usd": None,
+            },
+        },
+    ]
+    kb_status = KBStatusResult(
+        state="up_to_date",
+        summary="Knowledge base is up to date.",
+        detail="The local Chroma index matches the current raw markdown snapshot.",
+    )
+
+    usage_totals = build_usage_totals(history)
+    overview = build_overview_metrics(history, kb_status)
+
+    assert usage_totals == {
+        "request_count": 2,
+        "input_tokens": 38,
+        "output_tokens": 17,
+        "total_tokens": 55,
+        "estimated_cost_usd": 0.000042,
+    }
+    assert overview["estimated_total_cost_usd"] == 0.000042
+
+
+def test_build_usage_totals_keeps_unknown_model_cost_unavailable() -> None:
+    history = [
+        {
+            "usage": {
+                "model_name": "gpt-unknown-2025-04-14",
+                "input_tokens": 18,
+                "output_tokens": 7,
+                "total_tokens": 25,
+                "estimated_cost_usd": None,
+            }
+        }
+    ]
+
+    assert build_usage_totals(history)["estimated_cost_usd"] is None
+
+
 def test_build_grounded_source_summary_counts_source_usage() -> None:
     history = [
         {
@@ -203,6 +265,50 @@ def test_build_model_usage_breakdown_aggregates_by_model() -> None:
     ]
 
 
+def test_build_model_usage_breakdown_infers_versioned_cost_only_when_priced() -> None:
+    history = [
+        {
+            "usage": {
+                "model_name": "gpt-4.1-mini-2025-04-14",
+                "input_tokens": 18,
+                "output_tokens": 7,
+                "total_tokens": 25,
+                "estimated_cost_usd": None,
+            }
+        },
+        {
+            "usage": {
+                "model_name": "gpt-unknown-2025-04-14",
+                "input_tokens": 18,
+                "output_tokens": 7,
+                "total_tokens": 25,
+                "estimated_cost_usd": None,
+            }
+        },
+    ]
+
+    rows = build_model_usage_breakdown(history)
+
+    assert rows == [
+        {
+            "model": "gpt-4.1-mini-2025-04-14",
+            "request_count": 1,
+            "input_tokens": 18,
+            "output_tokens": 7,
+            "total_tokens": 25,
+            "estimated_cost_usd": 0.000018,
+        },
+        {
+            "model": "gpt-unknown-2025-04-14",
+            "request_count": 1,
+            "input_tokens": 18,
+            "output_tokens": 7,
+            "total_tokens": 25,
+            "estimated_cost_usd": None,
+        },
+    ]
+
+
 def test_build_recent_diagnostics_rows_shapes_latest_turns_first() -> None:
     history = [
         {
@@ -212,9 +318,11 @@ def test_build_recent_diagnostics_rows_shapes_latest_turns_first() -> None:
             "official_docs_result": None,
             "sources": ["A", "B"],
             "usage": {
-                "model_name": "gpt-4.1-mini",
-                "total_tokens": 30,
-                "estimated_cost_usd": 0.000024,
+                "model_name": "gpt-4.1-mini-2025-04-14",
+                "input_tokens": 18,
+                "output_tokens": 7,
+                "total_tokens": 25,
+                "estimated_cost_usd": None,
             },
         },
         {
@@ -241,10 +349,10 @@ def test_build_recent_diagnostics_rows_shapes_latest_turns_first() -> None:
         {
             "query_preview": "How should I persist Chroma...",
             "response_type": "Grounded answer",
-            "model": "gpt-4.1-mini",
+            "model": "gpt-4.1-mini-2025-04-14",
             "source_count": 2,
-            "total_tokens": 30,
-            "estimated_cost_usd": 0.000024,
+            "total_tokens": 25,
+            "estimated_cost_usd": 0.000018,
         },
     ]
 

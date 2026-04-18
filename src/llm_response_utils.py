@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from src.config import SUPPORTED_CHAT_MODELS
@@ -11,6 +12,7 @@ CHAT_MODEL_PRICING_PER_MILLION = {
     "gpt-4.1": {"input": 2.00, "output": 8.00},
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
 }
+MODEL_VERSION_SUFFIX_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}$")
 
 UNPRICED_SUPPORTED_CHAT_MODELS = tuple(
     model_name
@@ -108,10 +110,49 @@ def estimate_cost_usd(
     if model_name is None:
         return None
 
-    pricing = CHAT_MODEL_PRICING_PER_MILLION.get(model_name.strip().lower())
-    if pricing is None:
+    priced_model_name = resolve_priced_model_name(model_name)
+    if priced_model_name is None:
         return None
 
+    pricing = CHAT_MODEL_PRICING_PER_MILLION[priced_model_name]
     input_cost = (input_tokens / 1_000_000) * pricing["input"]
     output_cost = (output_tokens / 1_000_000) * pricing["output"]
     return round(input_cost + output_cost, 6)
+
+
+def estimate_usage_cost_usd(usage: Mapping[str, object]) -> float | None:
+    estimated_cost = usage.get("estimated_cost_usd")
+    if isinstance(estimated_cost, int | float):
+        return round(float(estimated_cost), 6)
+
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    model_name = usage.get("model_name")
+    if (
+        not isinstance(model_name, str)
+        or not isinstance(input_tokens, int)
+        or not isinstance(output_tokens, int)
+    ):
+        return None
+
+    return estimate_cost_usd(
+        model_name=model_name,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
+def resolve_priced_model_name(model_name: str) -> str | None:
+    normalized_model_name = model_name.strip().lower()
+    if normalized_model_name in CHAT_MODEL_PRICING_PER_MILLION:
+        return normalized_model_name
+
+    for base_model_name in sorted(CHAT_MODEL_PRICING_PER_MILLION, key=len, reverse=True):
+        prefix = f"{base_model_name}-"
+        if not normalized_model_name.startswith(prefix):
+            continue
+        version_suffix = normalized_model_name.removeprefix(prefix)
+        if MODEL_VERSION_SUFFIX_PATTERN.fullmatch(version_suffix):
+            return base_model_name
+
+    return None
