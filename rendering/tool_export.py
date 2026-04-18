@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rendering.structured_display import build_tool_result_display_data
+from ui.display_payloads import build_tool_result_display_data
 
 
 def build_tool_result_markdown_lines(tool_result: object) -> list[str]:

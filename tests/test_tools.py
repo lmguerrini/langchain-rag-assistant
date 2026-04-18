@@ -67,6 +67,19 @@ def test_diagnose_streamlit_missing_module_is_not_unknown() -> None:
     assert result.error_category == "imports"
 
 
+def test_diagnose_streamlit_duplicate_widget_id_returns_specific_ui_guidance() -> None:
+    result = diagnose_stack_error(
+        DiagnoseStackErrorInput(
+            library="streamlit",
+            error_message="DuplicateWidgetID",
+        )
+    )
+
+    assert result.error_category == "ui"
+    assert any("unique key" in check for check in result.recommended_checks)
+    assert any("same implicit or explicit key" in cause for cause in result.likely_causes)
+
+
 def test_diagnose_invalid_api_key_is_not_unknown() -> None:
     result = diagnose_stack_error(
         DiagnoseStackErrorInput(

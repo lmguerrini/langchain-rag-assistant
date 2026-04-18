@@ -70,6 +70,8 @@ def _build_cached_chat_model(
         api_key=api_key,
         model=model_name,
         temperature=temperature,
+        max_retries=3,
+        request_timeout=30,
     )
 
 

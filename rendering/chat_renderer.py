@@ -3,28 +3,18 @@ from __future__ import annotations
 import streamlit as st
 
 from rendering.response_labels import (
-    build_session_usage_totals,
     format_request_usage_label,
-    format_session_usage_label,
     get_response_generation_explanation,
     get_response_summary_line,
     get_response_type_label,
 )
 from rendering.structured_display import (
-    _clean_display_text,
-    _format_source_metadata_fragment,
-    _format_tool_field_lines,
-    _format_tool_scalar_value,
-    build_official_docs_display_data,
-    build_tool_field_display_rows,
-    build_tool_result_display_data,
-    format_official_docs_library_label,
-    format_official_docs_provider_label,
     format_source_display,
-    format_tool_field_label,
-    format_tool_name_label,
-    parse_source_string,
     render_tool_result_fields,
+)
+from ui.display_payloads import (
+    build_official_docs_display_data,
+    build_tool_result_display_data,
 )
 
 

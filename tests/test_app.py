@@ -47,6 +47,7 @@ from app import (
     run_kb_rebuild_action,
     should_show_kb_rebuild_trigger,
     should_skip_resource_loading,
+    should_stream_grounded_query,
     validate_selected_chat_model,
     validate_query,
 )
@@ -162,6 +163,15 @@ def test_should_skip_resource_loading_only_for_tool_queries() -> None:
     assert should_skip_resource_loading(
         "How should I persist and rebuild the Chroma index locally?"
     ) is False
+
+
+def test_should_stream_grounded_query_excludes_official_docs_requests() -> None:
+    assert should_stream_grounded_query(
+        "According to LangChain docs, how should I start a small RAG app?"
+    ) is False
+    assert should_stream_grounded_query(
+        "How should I persist and rebuild the Chroma index locally?"
+    ) is True
 
 
 def test_build_official_docs_display_data_formats_readable_documents() -> None:

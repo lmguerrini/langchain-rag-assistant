@@ -3,7 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from build_index import KBRebuildResult, rebuild_knowledge_base
-from rendering.chat_renderer import format_session_usage_label
+from rendering.response_labels import format_session_usage_label
 from rendering.export_renderer import EXPORT_FORMAT_OPTIONS, get_export_artifact
 from services.chat_service import (
     clear_vector_store_cache,

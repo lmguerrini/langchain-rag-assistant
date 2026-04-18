@@ -105,8 +105,24 @@ def diagnose_stack_error(
         )
 
     if tool_input.library == "streamlit" and (
+        "duplicatewidgetid" in normalized
+        or "duplicate widget" in normalized
+    ):
+        return DiagnoseStackErrorOutput(
+            library=tool_input.library,
+            error_category="ui",
+            likely_causes=[
+                "Multiple Streamlit widgets are being created with the same implicit or explicit key.",
+                "A widget is rendered repeatedly in a loop or rerun path without a unique key.",
+            ],
+            recommended_checks=[
+                "Give each repeated widget a stable unique key.",
+                "Check loops, conditionals, and chat reruns for duplicate widget construction.",
+            ],
+        )
+
+    if tool_input.library == "streamlit" and (
         "session state" in normalized
-        or "duplicatewidgetid" in normalized
         or "no module named 'streamlit'" in normalized
         or 'no module named "streamlit"' in normalized
     ):

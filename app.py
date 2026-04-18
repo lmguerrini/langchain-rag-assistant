@@ -6,41 +6,24 @@ import streamlit as st
 
 from rendering.analytics_renderer import render_analytics_dashboard
 from rendering.charts import (
-    _format_cost_metric,
-    build_horizontal_bar_chart,
     build_model_usage_chart,
     build_model_usage_chart_rows,
     build_response_behavior_chart,
     build_response_behavior_chart_rows,
 )
 from rendering.chat_renderer import (
-    _clean_display_text,
-    _format_source_metadata_fragment,
-    _format_tool_field_lines,
-    _format_tool_scalar_value,
-    build_official_docs_display_data,
+    render_latest_turn,
+)
+from rendering.response_labels import (
     build_session_usage_totals,
-    build_tool_field_display_rows,
-    build_tool_result_display_data,
-    format_official_docs_library_label,
-    format_official_docs_provider_label,
     format_request_usage_label,
     format_session_usage_label,
-    format_source_display,
-    format_tool_field_label,
-    format_tool_name_label,
     get_response_generation_explanation,
     get_response_summary_line,
     get_response_type_label,
-    parse_source_string,
-    render_latest_turn,
 )
+from rendering.structured_display import format_source_display, parse_source_string
 from rendering.export_renderer import (
-    EXPORT_FORMAT_OPTIONS,
-    PDF_TEXT_REPLACEMENTS,
-    _build_markdown_tool_field_lines,
-    _build_text_tool_field_lines,
-    build_cached_export_data,
     build_conversation_csv,
     build_conversation_json,
     build_conversation_markdown,
@@ -54,10 +37,7 @@ from rendering.export_renderer import (
     normalize_text_for_pdf,
 )
 from services.chat_service import (
-    PREVIEW_LENGTH,
     AppValidationError,
-    _build_cached_chat_model,
-    _build_cached_vector_store,
     build_chat_model_cache_inputs,
     build_safe_log_metadata,
     build_turn_record,
@@ -73,27 +53,19 @@ from services.chat_service import (
     validate_query,
     validate_selected_chat_model,
 )
-from src.chains import (
-    maybe_match_official_docs_query,
-    run_backend_query,
-    stream_answer_query,
-)
-from src.config import Settings, get_settings
-from src.kb_status import KBStatusResult, get_kb_status
+from src.config import get_settings
+from src.kb_status import get_kb_status
 from src.logger import configure_logging, get_logger
 from src.rate_limit import apply_rate_limit
-from src.schemas import AnswerResult
-from state.session_state import (
-    ANALYTICS_EVAL_ERROR_KEY,
-    ANALYTICS_EVAL_REPORT_KEY,
-    CHAT_MODEL_SESSION_KEY,
-    KB_REBUILD_FEEDBACK_KEY,
-    initialize_session_state,
-)
+from state.session_state import CHAT_MODEL_SESSION_KEY, initialize_session_state
 from ui.chat import (
     build_chat_input_visibility_script,
     render_chat_input_visibility_controller,
     render_streaming_grounded_answer,
+)
+from ui.display_payloads import (
+    build_official_docs_display_data,
+    build_tool_result_display_data,
 )
 from ui.sidebar import (
     build_kb_rebuild_error_message,
