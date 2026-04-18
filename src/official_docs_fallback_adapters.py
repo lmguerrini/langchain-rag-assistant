@@ -17,6 +17,20 @@ from src.schemas import (
 FALLBACK_DOC_LIMIT = 3
 
 
+def lookup_langchain_official_docs(
+    *,
+    request: OfficialDocsLookupRequest,
+    settings: Settings | None = None,
+    manifest_path: Path | None = None,
+) -> OfficialDocsLookupResult:
+    return _lookup_fallback_official_docs(
+        request=request,
+        expected_library="langchain",
+        settings=settings,
+        manifest_path=manifest_path,
+    )
+
+
 def lookup_streamlit_official_docs(
     *,
     request: OfficialDocsLookupRequest,

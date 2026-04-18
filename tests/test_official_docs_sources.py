@@ -4,6 +4,7 @@ import pytest
 
 from src.official_docs_fallback_adapters import (
     lookup_chroma_official_docs,
+    lookup_langchain_official_docs as lookup_langchain_official_docs_from_fallback,
     lookup_streamlit_official_docs,
 )
 from src.official_docs_mcp_adapters import (
@@ -12,6 +13,7 @@ from src.official_docs_mcp_adapters import (
     send_mcp_jsonrpc_request,
 )
 from src.official_docs_sources import (
+    lookup_langchain_official_docs as lookup_langchain_official_docs_with_fallback,
     lookup_official_docs_documents,
     select_official_docs_source_adapter,
 )
@@ -933,6 +935,105 @@ def test_lookup_streamlit_official_docs_uses_deterministic_fallback_manifest(tmp
     assert result.documents[0].provider_mode == "official_fallback"
     assert result.documents[0].title == "st.session_state"
     assert "reruns" in result.documents[0].snippets[0].text
+
+
+def test_lookup_langchain_official_docs_uses_deterministic_fallback_manifest(tmp_path) -> None:
+    manifest_path = tmp_path / "source_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "library": "langchain",
+                        "title": "Build a RAG agent with LangChain",
+                        "url": "https://docs.langchain.com/oss/python/langchain/rag",
+                        "snippets": [
+                            "Start with a simple retrieval pipeline before adding agents."
+                        ],
+                        "keywords": ["langchain", "rag", "retrieval", "start", "pipeline"],
+                    },
+                    {
+                        "library": "langchain",
+                        "title": "Retrieval",
+                        "url": "https://docs.langchain.com/oss/python/langchain/retrieval",
+                        "snippets": [
+                            "Retrieval fetches documents and passes them as model context."
+                        ],
+                        "keywords": ["langchain", "retrieval", "documents", "context"],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    request = OfficialDocsLookupRequest(
+        query="According to LangChain docs, how should I start a small RAG app?",
+        library="langchain",
+    )
+
+    result = lookup_langchain_official_docs_from_fallback(
+        request=request,
+        manifest_path=manifest_path,
+    )
+
+    assert result.library == "langchain"
+    assert result.documents[0].provider_mode == "official_fallback"
+    assert result.documents[0].title == "Build a RAG agent with LangChain"
+    assert "simple retrieval pipeline" in result.documents[0].snippets[0].text
+
+
+def test_lookup_langchain_official_docs_falls_back_when_mcp_is_unavailable(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    manifest_path = tmp_path / "source_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "library": "langchain",
+                        "title": "Build a RAG agent with LangChain",
+                        "url": "https://docs.langchain.com/oss/python/langchain/rag",
+                        "snippets": [
+                            "Start with a simple retrieval pipeline before adding agents."
+                        ],
+                        "keywords": ["langchain", "rag", "retrieval", "start", "pipeline"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def unavailable_mcp_lookup(*, request):
+        raise RuntimeError("Official docs MCP request failed: connection timed out")
+
+    def fallback_lookup(*, request):
+        return lookup_langchain_official_docs_from_fallback(
+            request=request,
+            manifest_path=manifest_path,
+        )
+
+    monkeypatch.setattr(
+        "src.official_docs_sources.lookup_langchain_official_docs_from_mcp",
+        unavailable_mcp_lookup,
+    )
+    monkeypatch.setattr(
+        "src.official_docs_sources.lookup_langchain_official_docs_from_fallback",
+        fallback_lookup,
+    )
+
+    result = lookup_langchain_official_docs_with_fallback(
+        request=OfficialDocsLookupRequest(
+            query="According to LangChain docs, how should I start a small RAG app?",
+            library="langchain",
+        )
+    )
+
+    assert result.library == "langchain"
+    assert result.documents[0].provider_mode == "official_fallback"
+    assert result.documents[0].title == "Build a RAG agent with LangChain"
 
 
 def test_lookup_chroma_official_docs_uses_deterministic_fallback_manifest(tmp_path) -> None:

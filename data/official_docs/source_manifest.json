@@ -1,6 +1,26 @@
 {
   "entries": [
     {
+      "library": "langchain",
+      "title": "Build a RAG agent with LangChain",
+      "url": "https://docs.langchain.com/oss/python/langchain/rag",
+      "snippets": [
+        "LangChain RAG applications combine retrieval with model calls so answers can use external context.",
+        "Start with a simple retrieval pipeline before adding more advanced agentic behavior."
+      ],
+      "keywords": ["langchain", "rag", "retrieval", "agent", "start", "pipeline", "context"]
+    },
+    {
+      "library": "langchain",
+      "title": "Retrieval",
+      "url": "https://docs.langchain.com/oss/python/langchain/retrieval",
+      "snippets": [
+        "Retrieval systems fetch relevant documents and pass them to a model as context.",
+        "Use retrievers when an application needs knowledge from documents or other external sources."
+      ],
+      "keywords": ["langchain", "retrieval", "documents", "context", "retriever", "external", "sources"]
+    },
+    {
       "library": "streamlit",
       "title": "st.chat_message",
       "url": "https://docs.streamlit.io/develop/api-reference/chat/st.chat_message",

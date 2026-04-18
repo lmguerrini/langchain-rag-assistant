@@ -7,6 +7,9 @@ from src.official_docs_fallback_adapters import (
     lookup_chroma_official_docs as lookup_chroma_official_docs_from_fallback,
 )
 from src.official_docs_fallback_adapters import (
+    lookup_langchain_official_docs as lookup_langchain_official_docs_from_fallback,
+)
+from src.official_docs_fallback_adapters import (
     lookup_streamlit_official_docs as lookup_streamlit_official_docs_from_fallback,
 )
 from src.official_docs_mcp_adapters import (
@@ -31,7 +34,12 @@ def lookup_langchain_official_docs(
     *,
     request: OfficialDocsLookupRequest,
 ) -> OfficialDocsLookupResult:
-    return lookup_langchain_official_docs_from_mcp(request=request)
+    try:
+        return lookup_langchain_official_docs_from_mcp(request=request)
+    except Exception as exc:
+        if _is_mcp_unavailable_error(exc):
+            return lookup_langchain_official_docs_from_fallback(request=request)
+        raise
 
 
 def lookup_openai_official_docs(
@@ -95,3 +103,27 @@ def lookup_official_docs_documents(
     if not result.documents:
         raise ValueError("Official docs adapter returned no documents.")
     return result
+
+
+def _is_mcp_unavailable_error(exc: Exception) -> bool:
+    if isinstance(exc, NotImplementedError):
+        return True
+    if isinstance(exc, RuntimeError):
+        message = str(exc).lower()
+        if "remote mcp not available" in message:
+            return True
+        if "official docs mcp request failed:" in message:
+            return True
+        transport_markers = (
+            "certificate verify failed",
+            "ssl",
+            "tls",
+            "timeout",
+            "timed out",
+            "connection",
+            "urlopen error",
+            "network is unreachable",
+            "name resolution",
+        )
+        return any(marker in message for marker in transport_markers)
+    return False
