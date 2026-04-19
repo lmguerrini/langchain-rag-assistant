@@ -80,10 +80,22 @@ def render_analytics_dashboard(
         "Estimated total cost",
         _format_cost_metric(overview["estimated_total_cost_usd"]),
     )
-    st.markdown("**Knowledge base**")
-    st.write(format_kb_status_label(kb_status).removeprefix("Status: "))
-    st.caption(kb_status.summary)
-    st.caption(kb_status.detail)
+
+    st.divider()
+    st.markdown("**Knowledge Base**")
+    kb_column, kb_detail_column = st.columns((1, 1))
+    with kb_column:
+        st.write(f"Status: {format_kb_status_label(kb_status).removeprefix('Status: ')}")
+        st.caption(kb_status.summary)
+        st.write(
+            "Rebuild action available: "
+            + ("Yes" if should_show_kb_rebuild_trigger(kb_status) else "No")
+        )
+    with kb_detail_column:
+        st.caption(kb_status.detail)
+        if kb_status.rebuild_command is not None:
+            st.caption("Manual rebuild command")
+            st.code(kb_status.rebuild_command, language="bash")
 
     st.divider()
     st.markdown("**Response Behavior**")
@@ -152,22 +164,6 @@ def render_analytics_dashboard(
         )
     else:
         st.info("No model usage data is available yet.")
-
-    st.divider()
-    st.markdown("**Knowledge Base**")
-    kb_column, kb_detail_column = st.columns((1, 1))
-    with kb_column:
-        st.write(f"Status: {format_kb_status_label(kb_status).removeprefix('Status: ')}")
-        st.caption(kb_status.summary)
-        st.write(
-            "Rebuild action available: "
-            + ("Yes" if should_show_kb_rebuild_trigger(kb_status) else "No")
-        )
-    with kb_detail_column:
-        st.caption(kb_status.detail)
-        if kb_status.rebuild_command is not None:
-            st.caption("Manual rebuild command")
-            st.code(kb_status.rebuild_command, language="bash")
 
     st.markdown("**Evaluation**")
     with st.container():
@@ -370,6 +366,13 @@ def build_evaluation_interpretation(
     if case_count == 0:
         status = "Needs improvement"
         summary = "No evaluation cases were included in the latest snapshot."
+    elif all(value == 1.0 for value in core_signals.values()):
+        return {
+            "status": "Good",
+            "summary": (
+                f"All evaluation metrics reached 100% across {case_count} cases."
+            ),
+        }
     elif all(value >= strong_threshold for value in core_signals.values()):
         status = "Good"
         summary = (
