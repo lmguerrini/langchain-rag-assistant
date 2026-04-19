@@ -236,7 +236,7 @@ def render_analytics_dashboard(
                 _format_percent_metric(
                     evaluation_summary_metrics["no_context_fallback_rate"]
                 ),
-                help="How often the assistant said it lacked context.",
+                help="How often the assistant could not find relevant knowledge-base context.",
             )
             summary_columns[1].metric(
                 "Sources-present rate",
