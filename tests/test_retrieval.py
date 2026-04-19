@@ -36,6 +36,14 @@ def test_infer_metadata_filters_skips_weak_query() -> None:
     assert filters.as_chroma_filter() == {}
 
 
+def test_infer_metadata_filters_avoids_weak_why_and_standalone_error_filters() -> None:
+    filters = infer_metadata_filters(
+        "Why should metadata fields make filtered retrieval easier to implement?"
+    )
+
+    assert filters.as_chroma_filter() == {}
+
+
 def test_retrieve_chunks_uses_filtered_retrieval(indexed_vector_store) -> None:
     result = retrieve_chunks(
         vector_store=indexed_vector_store,
@@ -116,6 +124,22 @@ def test_retrieve_chunks_returns_no_usable_chunks_for_off_domain_query(indexed_v
     result = retrieve_chunks(
         vector_store=indexed_vector_store,
         request=RetrievalRequest(query="What is the capital of France?", top_k=2),
+    )
+
+    assert result.chunks == []
+    assert result.sources == []
+    assert result.used_fallback is False
+
+
+def test_retrieve_chunks_returns_no_context_for_undercovered_rate_limit_query(
+    indexed_vector_store,
+) -> None:
+    result = retrieve_chunks(
+        vector_store=indexed_vector_store,
+        request=RetrievalRequest(
+            query="How should I implement rate limiting for this assistant?",
+            top_k=3,
+        ),
     )
 
     assert result.chunks == []

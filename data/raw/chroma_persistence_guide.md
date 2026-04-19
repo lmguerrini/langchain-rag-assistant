@@ -88,6 +88,31 @@ That is useful for Chroma persistence because a clean index depends on predictab
 - optional `error_family`
 - `chunk_index`
 
+## Metadata Fields and Filtered Retrieval
+
+Metadata fields make filtered retrieval easier because they give Chroma stable
+attributes to search before the model sees any context. In this project the raw
+frontmatter is copied onto every chunk, so a retrieval request can narrow by
+`topic`, `library`, `doc_type`, or `error_family` before ordinary similarity
+ranking decides which chunks are most relevant.
+
+That matters for persistence work because Chroma questions often share generic
+words with unrelated RAG topics: `index`, `collection`, `metadata`, `retrieval`,
+`filtered`, and `rebuild`. Accurate metadata keeps those terms attached to the
+right operational source. A query about why metadata fields help filtered
+retrieval should point back to the Chroma guide when the answer needs to explain
+how frontmatter becomes chunk metadata and how that metadata supports precise
+local retrieval.
+
+Use these rules when adding or revising raw markdown:
+
+1. Choose the narrowest truthful `topic` and `library`.
+2. Set `doc_type` to the document's actual role, not just the question style.
+3. Use `error_family` only when the document is meant to support that failure
+   mode.
+4. Include the operational terms users will ask for in the body, not only in
+   frontmatter.
+
 `write_kb_manifest(...)` records a summary of the successful build:
 
 - `built_at`

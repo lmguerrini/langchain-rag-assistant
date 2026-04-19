@@ -60,12 +60,12 @@ DOC_TYPE_KEYWORDS = {
     "troubleshooting": {"error", "bug", "debug", "fix", "issue", "failing"},
     "how_to": {"how to", "configure", "build", "use", "persist"},
     "example": {"example", "sample", "pattern"},
-    "concept": {"concept", "overview", "fundamentals", "why"},
+    "concept": {"concept", "overview", "fundamentals"},
 }
 
 ERROR_FAMILY_KEYWORDS = {
     "imports": {"import", "imports", "module not found"},
-    "api": {"api", "authentication", "auth", "rate limit"},
+    "api": {"api", "authentication", "auth"},
     "retrieval": {"retrieval", "recall", "similarity search", "filters"},
     "ui": {"ui", "render", "chat input", "session state"},
     "persistence": {"persist", "persistence", "database", "stored", "rebuild"},
@@ -115,7 +115,6 @@ DOMAIN_QUERY_KEYWORDS = {
     "prompt",
     "prompting",
     "rag",
-    "rate limit",
     "rebuild",
     "rerun",
     "retrieval",
@@ -212,11 +211,18 @@ def rewrite_query(query: str) -> str:
 
 def infer_metadata_filters(query: str) -> RetrievalFilters:
     normalized = _normalize_query(query)
+    topic = _infer_single_match(normalized, TOPIC_KEYWORDS)
+    library = _infer_single_match(normalized, LIBRARY_KEYWORDS)
+    doc_type = _infer_single_match(normalized, DOC_TYPE_KEYWORDS)
+    error_family = _infer_single_match(normalized, ERROR_FAMILY_KEYWORDS)
+    if topic is None and library is None and doc_type is None:
+        error_family = None
+
     return RetrievalFilters(
-        topic=_infer_single_match(normalized, TOPIC_KEYWORDS),
-        library=_infer_single_match(normalized, LIBRARY_KEYWORDS),
-        doc_type=_infer_single_match(normalized, DOC_TYPE_KEYWORDS),
-        error_family=_infer_single_match(normalized, ERROR_FAMILY_KEYWORDS),
+        topic=topic,
+        library=library,
+        doc_type=doc_type,
+        error_family=error_family,
     )
 
 
