@@ -64,7 +64,7 @@ def test_diagnose_streamlit_missing_module_is_not_unknown() -> None:
         )
     )
 
-    assert result.error_category == "imports"
+    assert result.error_category == "dependency_missing"
 
 
 def test_diagnose_streamlit_duplicate_widget_id_returns_specific_ui_guidance() -> None:
@@ -127,6 +127,88 @@ def test_maybe_invoke_tool_matches_calculate_cost_phrasing() -> None:
     assert result.tool_error is None
     assert result.tool_input.num_calls == 3
     assert result.tool_output.estimated_total_cost_usd == pytest.approx(0.0036)
+
+
+def test_maybe_invoke_tool_parses_cost_requests_as_num_calls() -> None:
+    result = maybe_invoke_tool(
+        "Calculate OpenAI cost for model gpt-4.1-mini with 1000 input tokens, "
+        "500 output tokens across 2 requests"
+    )
+
+    assert result is not None
+    assert result.tool_name == "estimate_openai_cost"
+    assert result.tool_error is None
+    assert result.tool_input.num_calls == 2
+
+
+def test_cost_queries_without_full_phrase_still_trigger_tool() -> None:
+    result = maybe_invoke_tool(
+        "Estimate cost for gpt-4.1-mini 1000 input 500 output for 2 calls"
+    )
+
+    assert result is not None
+    assert result.tool_name == "estimate_openai_cost"
+    assert result.tool_error is None
+    assert result.tool_input.input_tokens == 1000
+    assert result.tool_input.output_tokens == 500
+    assert result.tool_input.num_calls == 2
+
+
+def test_cost_tool_parses_input_then_number_format() -> None:
+    result = maybe_invoke_tool(
+        "Estimate cost for gpt-4.1-mini input 1000 output 500"
+    )
+
+    assert result is not None
+    assert result.tool_name == "estimate_openai_cost"
+    assert result.tool_error is None
+    assert result.tool_input.input_tokens == 1000
+    assert result.tool_input.output_tokens == 500
+
+
+def test_cost_query_with_full_token_shape_triggers_without_model() -> None:
+    result = maybe_invoke_tool("Cost for 3000 input tokens and 1500 output tokens")
+
+    assert result is not None
+    assert result.tool_name == "estimate_openai_cost"
+    assert result.tool_output is None
+    assert "supported model name" in result.tool_error
+
+
+def test_vague_openai_cost_question_does_not_trigger_cost_tool() -> None:
+    result = maybe_invoke_tool("How does cost work in OpenAI?")
+
+    assert result is None
+
+
+def test_vague_token_cost_question_does_not_trigger_cost_tool() -> None:
+    result = maybe_invoke_tool("How much would 1000 tokens cost?")
+
+    assert result is None
+
+
+def test_diagnose_module_not_found_error_returns_dependency_missing() -> None:
+    result = diagnose_stack_error(
+        DiagnoseStackErrorInput(
+            library="langchain",
+            error_message="ModuleNotFoundError: no module named X",
+        )
+    )
+
+    assert result.error_category == "dependency_missing"
+    assert result.likely_causes
+
+
+def test_diagnose_chroma_module_not_found_error_returns_dependency_missing() -> None:
+    result = diagnose_stack_error(
+        DiagnoseStackErrorInput(
+            library="chroma",
+            error_message="ModuleNotFoundError: No module named 'chroma'",
+        )
+    )
+
+    assert result.error_category == "dependency_missing"
+    assert result.likely_causes
 
 
 def test_extract_number_skips_empty_match_groups(monkeypatch) -> None:

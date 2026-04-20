@@ -22,17 +22,25 @@ MODEL_PRICING_PER_MILLION = {
 
 TOKEN_PATTERNS = {
     "input_tokens": [
-        re.compile(r"(?:input_tokens|input tokens)\s*=?\s*([\d,]+)"),
-        re.compile(r"([\d,]+)\s*input tokens"),
+        re.compile(
+            r"(?<!input )(?<!output )(?<!input tokens )(?<!output tokens )"
+            r"\b([\d,]+)\s*input(?:\s+tokens)?\b"
+        ),
+        re.compile(r"\b(?:input_tokens|input tokens|input)\s*=?\s*([\d,]+)\b"),
     ],
     "output_tokens": [
-        re.compile(r"(?:output_tokens|output tokens)\s*=?\s*([\d,]+)"),
-        re.compile(r"([\d,]+)\s*output tokens"),
+        re.compile(
+            r"(?<!input )(?<!output )(?<!input tokens )(?<!output tokens )"
+            r"\b([\d,]+)\s*output(?:\s+tokens)?\b"
+        ),
+        re.compile(r"\b(?:output_tokens|output tokens|output)\s*=?\s*([\d,]+)\b"),
     ],
     "num_calls": [
         re.compile(r"(?:num_calls|calls)\s*=?\s*([\d,]+)"),
+        re.compile(r"(?:across|for|over)\s+([\d,]+)\s+(?:calls?|requests?|runs?)"),
         re.compile(r"for\s+([\d,]+)\s+calls"),
         re.compile(r"([\d,]+)\s+calls"),
+        re.compile(r"([\d,]+)\s+(?:requests?|runs?)"),
     ],
 }
 
@@ -71,6 +79,26 @@ def diagnose_stack_error(
         for part in [tool_input.error_message, tool_input.code_context_summary or ""]
         if part.strip()
     )
+
+    if (
+        "modulenotfounderror" in normalized
+        or "module not found" in normalized
+        or "no module named" in normalized
+    ):
+        return DiagnoseStackErrorOutput(
+            library=tool_input.library,
+            error_category="dependency_missing",
+            likely_causes=[
+                "The required package is not installed in the active environment.",
+                "The command is running in the wrong virtual environment.",
+                "The import path does not match the installed package structure.",
+            ],
+            recommended_checks=[
+                "Install the missing package with pip in the active environment.",
+                "Check that the expected virtual environment is activated.",
+                "Verify the Python interpreter and import path used by the command.",
+            ],
+        )
 
     if tool_input.library == "langchain" and (
         "no module named" in normalized or "cannot import" in normalized
@@ -341,20 +369,33 @@ def _build_retrieval_tool_result(
 
 def _is_cost_query(normalized_query: str) -> bool:
     has_openai = "openai" in normalized_query
-    has_cost_intent = any(
-        phrase in normalized_query
-        for phrase in ("cost", "price", "pricing", "estimate", "calculate")
+    has_supported_model = any(
+        model in normalized_query for model in MODEL_PRICING_PER_MILLION
     )
-    has_cost_shape = (
-        has_openai
-        and (
-            has_cost_intent
-            or "input tokens" in normalized_query
-            or "output tokens" in normalized_query
-            or any(model in normalized_query for model in MODEL_PRICING_PER_MILLION)
+    has_cost_action = any(
+        phrase in normalized_query
+        for phrase in ("estimate", "calculate")
+    )
+    has_cost_term = any(
+        phrase in normalized_query
+        for phrase in ("cost", "price", "pricing")
+    )
+    has_cost_intent = has_cost_action or has_cost_term
+    has_full_token_shape = (
+        _extract_cost_token_counts(normalized_query) is not None
+        or (
+            _extract_number(normalized_query, "input_tokens") is not None
+            and _extract_number(normalized_query, "output_tokens") is not None
         )
     )
-    return has_cost_shape
+
+    if not has_cost_intent:
+        return False
+
+    if has_supported_model or has_full_token_shape:
+        return True
+
+    return has_openai and has_cost_action
 
 
 def _parse_cost_query(normalized_query: str) -> EstimateOpenAICostInput | None:
@@ -368,8 +409,13 @@ def _parse_cost_query(normalized_query: str) -> EstimateOpenAICostInput | None:
     if model_name is None:
         return None
 
-    input_tokens = _extract_number(normalized_query, "input_tokens")
-    output_tokens = _extract_number(normalized_query, "output_tokens")
+    token_counts = _extract_cost_token_counts(normalized_query)
+    if token_counts is None:
+        input_tokens = _extract_number(normalized_query, "input_tokens")
+        output_tokens = _extract_number(normalized_query, "output_tokens")
+    else:
+        input_tokens, output_tokens = token_counts
+
     if input_tokens is None or output_tokens is None:
         return None
 
@@ -458,6 +504,31 @@ def _extract_number(query: str, field_name: str) -> int | None:
                 return int(captured_value.replace(",", ""))
             except ValueError:
                 continue
+    return None
+
+
+def _extract_cost_token_counts(query: str) -> tuple[int, int] | None:
+    paired_patterns = [
+        re.compile(
+            r"\b([\d,]+)\s*input(?:\s+tokens)?\b.*?"
+            r"\b([\d,]+)\s*output(?:\s+tokens)?\b"
+        ),
+        re.compile(
+            r"\binput(?:_tokens|\s+tokens)?\s*=?\s*([\d,]+)\b.*?"
+            r"\boutput(?:_tokens|\s+tokens)?\s*=?\s*([\d,]+)\b"
+        ),
+    ]
+    for pattern in paired_patterns:
+        match = pattern.search(query)
+        if match is None:
+            continue
+        try:
+            return (
+                int(match.group(1).replace(",", "")),
+                int(match.group(2).replace(",", "")),
+            )
+        except ValueError:
+            continue
     return None
 
 
