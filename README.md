@@ -32,7 +32,7 @@ It is not intended to be:
 
 ```text
 .
-├── app.py                               # Main Streamlit application entry point
+├── app.py                               # Streamlit entry point and top-level app orchestration
 ├── build_index.py                       # CLI for building and rebuilding the local Chroma index
 ├── official_docs_mcp_server.py          # Local MCP server exposing official-docs lookup tooling
 ├── project_tools_mcp_server.py          # Local MCP server exposing internal project search tooling
@@ -46,6 +46,10 @@ It is not intended to be:
 ├── docs/                                # Short project-specific usage notes
 │   ├── evaluation.md                    # Evaluation workflow reference
 │   └── project_tools_mcp_server.md      # Project-tools MCP server usage guide
+├── rendering/                           # Streamlit rendering helpers, labels, charts, exports, and displays
+├── services/                            # App service layer for validation, cached resources, and query execution
+├── state/                               # Streamlit session-state initialization and key constants
+├── ui/                                  # Sidebar and streaming-chat UI helpers
 ├── src/                                 # Application source code
 │   ├── analytics.py                     # Analytics dashboard data-shaping helpers
 │   ├── chains.py                        # Main request routing and answer orchestration
@@ -130,19 +134,31 @@ python -m src.evaluation --cases data/eval/eval_cases.json
 
 ## Architecture Summary
 
-The project is organized around four main paths:
+The app is modularized so `app.py` stays mostly responsible for page setup,
+tab orchestration, and high-level request flow. Supporting code is split across:
+
+- `ui/` for sidebar controls, chat-input behavior, and streaming answer display
+- `services/` for validation, cached OpenAI/Chroma resources, and query execution wrappers
+- `state/` for Streamlit session-state initialization and shared keys
+- `rendering/` for chat rendering, analytics rendering, labels, charts, structured displays, and exports
+- `src/` for retrieval, routing, tools, official-docs lookup, evaluation, schemas, and persistence logic
+
+The runtime behavior is organized around four main paths:
 
 1. **Local KB RAG**
    - markdown corpus in `data/raw/`
    - OpenAI embeddings
    - Chroma vector store
    - query rewriting and metadata-aware retrieval in `src/retrieval.py`
-   - grounded answer generation through LangChain/OpenAI
+   - grounded answer generation through LangChain/OpenAI with separated system, query, context, and source messages
+   - streaming responses for grounded KB answers
 
 2. **Official docs answer flow**
    - explicit docs-intent routing in `src/chains.py`
-   - official-docs retrieval via supported MCP-compatible documentation sources for OpenAI and LangChain
-   - controlled local fallback for Streamlit and Chroma official docs
+   - official-docs retrieval via supported MCP-compatible documentation sources where available
+   - LangChain MCP lookup with deterministic local fallback when the remote MCP path is unavailable
+   - controlled local fallback manifests for Streamlit and Chroma official docs
+   - OpenAI official-docs lookup through the configured MCP adapter
    - answer generation constrained to retrieved official-docs evidence
 
 3. **Built-in tools**
@@ -152,11 +168,12 @@ The project is organized around four main paths:
    - retrieval-configuration recommendation
 
 4. **UI, observability, and evaluation**
-   - Streamlit chat + analytics tabs in `app.py`
+   - Streamlit chat + analytics tabs rendered through `rendering/` and `ui/`
    - session usage/cost tracking
    - KB freshness and rebuild visibility
+   - grouped source display with chunk-index transparency
    - export flows
-   - runnable evaluation workflow in `src/evaluation.py`
+   - runnable evaluation workflow and dashboard interpretation in `src/evaluation.py` and `rendering/analytics_renderer.py`
 
 ## Core Features
 
@@ -166,7 +183,9 @@ The project is organized around four main paths:
 - OpenAI embeddings + Chroma similarity search
 - Chunking and chunk overlap during index build
 - Query rewriting and metadata filter inference for more structured retrieval
-- Grounded answers with visible sources
+- Grounded answers with visible sources and safe no-context fallback behavior
+- Message-separated prompt construction for system rules, user query, retrieved context, and source metadata
+- Streaming answer display for grounded KB responses
 
 ### 2. Tool calling
 
@@ -193,6 +212,8 @@ Each tool is relevant to building or debugging LangChain/Chroma/Streamlit RAG ap
 ### 4. Technical implementation
 
 - LangChain used for model integration and retrieval orchestration
+- Configured retry and timeout behavior for OpenAI chat calls
+- Timeout-aware official-docs MCP transport and controlled unavailable-state handling
 - Proper error handling and user-facing error messages
 - Basic application logging for request handling, validation failures, rate-limit events, and backend errors
 - Input validation for queries and tool inputs
@@ -203,6 +224,7 @@ Each tool is relevant to building or debugging LangChain/Chroma/Streamlit RAG ap
 
 - Streamlit interface with separate Chat and Analytics tabs
 - Visible sources for grounded answers
+- Source entries grouped by document, with relevant chunk indices shown inline
 - readable tool-result presentation
 - official-docs result display
 - progress/status indicators during request handling and KB rebuilds
@@ -242,11 +264,14 @@ These are additional implemented capabilities beyond the core app flow.
 
 The Analytics tab surfaces:
 - response-type breakdowns
-- token and cost totals
+- readable token and cost totals
 - model usage visibility
 - KB freshness / rebuild state
 - recent-turn diagnostics
 - evaluation snapshot visibility
+- evaluation interpretation with concise status text
+- fallback-rate warnings when no-context fallback is common
+- grouped source display behavior in the chat UI, including relevant chunk indices
 
 ### Evaluation workflow
 
@@ -261,11 +286,24 @@ It evaluates:
 
 The evaluation dataset lives in `data/eval/eval_cases.json`.
 
+On the current curated evaluation set, the latest implementation reaches perfect
+aggregate results for source recall, keyword recall, context-match rate,
+no-context fallback behavior, and source presence. This is useful as a regression
+signal, but it is still a small curated dataset and does not guarantee complete
+real-world generalization.
+
+The Analytics tab presents these results with metric tooltips, interpretation
+text, and fallback warnings so the snapshot is easier to read without changing
+the underlying evaluation scoring.
+
 ## MCP Work
 
 The project includes both MCP consumption and MCP exposure:
 
 - official-docs answer flow uses MCP-compatible documentation lookups where appropriate
+- LangChain official-docs lookup can fall back to the curated local manifest when the remote MCP path is unavailable
+- Streamlit and Chroma official-docs lookups use deterministic local fallback entries
+- fallback coverage is limited to the entries present in `data/official_docs/source_manifest.json`
 - local project tools are exposed through a project-tools MCP server
 
 This keeps MCP support separate from the main chat flow architecture.
